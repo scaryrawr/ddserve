@@ -108,6 +108,46 @@ describe("runCli", () => {
     expect(output).toContain("HTTP");
   });
 
+  test("marks installed docsets in available docsets list", async () => {
+    const cacheRoot = join(testRoot, randomUUID(), "cache");
+    await atomicWriteJson(cachePaths(cacheRoot).devdocsSourceIndex, {
+      fetchedAt: "2026-01-01T00:00:00.000Z",
+      url: "https://devdocs.io/docs.json",
+      docsets: [
+        { name: "CSS", slug: "css", type: "css" },
+        { name: "HTTP", slug: "http", type: "http", release: "1" },
+      ],
+    });
+    await writeCacheManifest(cacheRoot, {
+      schemaVersion: CACHE_SCHEMA_VERSION,
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      docs: {
+        http: {
+          source: DEV_DOCS_SOURCE,
+          slug: "http",
+          name: "HTTP",
+          type: "http",
+          contentFormat: EXTRACTED_CONTENT_FORMAT,
+          release: "1",
+          installedAt: "2026-01-01T00:00:00.000Z",
+          updatedAt: "2026-01-01T00:00:00.000Z",
+          pageCount: 2,
+        },
+      },
+    });
+
+    let output = "";
+    await runCli(["docs", "available", "--offline"], {
+      env: { DDSERVE_CACHE_DIR: cacheRoot },
+      stdout: (message) => {
+        output += message;
+      },
+    });
+
+    expect(output).toContain("*  http");
+    expect(output).toContain("   css");
+  });
+
   test("prints the resolved config path with CLI paths taking precedence", async () => {
     const envPath = join(testRoot, "env-config.json");
     const cliPath = join(testRoot, "cli-config.json");

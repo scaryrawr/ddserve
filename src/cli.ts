@@ -4,7 +4,7 @@ import { isAbsolute, join } from "node:path";
 import { cachePaths, ensureCacheRoot, readCacheManifest, resolveCacheRoot } from "./cache";
 import { loadConfig, redactConfig, resolveConfigPath, type DdserveConfig } from "./config";
 import { DdserveError } from "./errors";
-import { formatBytes, formatTable } from "./format";
+import { formatBytes, formatTable, type TableColumn } from "./format";
 import { getAvailableDocsets } from "./devdocs";
 import { installDocset, removeDocset, updateDocsets } from "./install";
 import { getEmbeddingsStatus, rebuildEmbeddings, refreshEmbeddings, type EmbeddingsStatusResult } from "./embeddings";
@@ -144,32 +144,41 @@ export async function runCli(argv: string[] = process.argv.slice(2), deps: CliDe
     .option("--force", "Reinstall even when cached docsets appear current")
     .action(async (subcommand: string | undefined, slug: string | undefined, options: CommandOptions) => {
       if (subcommand === "available") {
-      const result = await getAvailableDocsets({
-        cacheRoot,
-        http: deps.http,
-        offline: options.offline,
-        now: deps.now,
-      });
+        const result = await getAvailableDocsets({
+          cacheRoot,
+          http: deps.http,
+          offline: options.offline,
+          now: deps.now,
+        });
 
-      for (const warning of result.warnings) {
-        stderr(`${warning}\n`);
-      }
+        for (const warning of result.warnings) {
+          stderr(`${warning}\n`);
+        }
 
-      if (options.json) {
-        writeOutput(stdout, JSON.stringify(result, null, 2));
-        return;
-      }
+        if (options.json) {
+          writeOutput(stdout, JSON.stringify(result, null, 2));
+          return;
+        }
 
-      writeOutput(
-        stdout,
-        formatTable(result.docsets, [
+        const manifest = await readCacheManifest(cacheRoot);
+        const installedSlugs = new Set(Object.keys(manifest.docs));
+        const showInstalledMarker = result.docsets.some((docset) => installedSlugs.has(docset.slug));
+        const columns: TableColumn<(typeof result.docsets)[number]>[] = [
           { header: "slug", value: (row) => row.slug },
           { header: "name", value: (row) => row.name },
           { header: "type", value: (row) => row.type },
           { header: "release", value: (row) => row.release ?? row.version },
           { header: "db", value: (row) => formatBytes(row.dbSize) },
-        ]),
-      );
+        ];
+
+        if (showInstalledMarker) {
+          columns.unshift({ header: "", value: (row) => (installedSlugs.has(row.slug) ? "*" : "") });
+        }
+
+        writeOutput(
+          stdout,
+          formatTable(result.docsets, columns),
+        );
         return;
       }
 
