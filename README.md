@@ -311,6 +311,13 @@ This repository can be installed as a local GitHub Copilot CLI plugin:
 copilot plugin install .
 ```
 
+It also exposes a repository marketplace manifest at `.github/plugin/marketplace.json`, so the plugin can be installed through a Copilot CLI marketplace:
+
+```sh
+copilot plugin marketplace add scaryrawr/ddserve
+copilot plugin install ddserve@ddserve-marketplace
+```
+
 The plugin manifest in `plugin.json` loads the MCP server configuration from `.mcp.json` and hook configuration from `hooks.json`. Both files point Copilot CLI at `http://127.0.0.1:43877`, so start `ddserve` before using the plugin-provided MCP tools or session-start hook:
 
 ```sh
