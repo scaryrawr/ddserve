@@ -3,6 +3,7 @@ import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { cachePaths, writeCacheManifest } from "../src/cache";
+import { COPILOT_SESSION_START_HOOK_PATH } from "../src/copilot-hooks";
 import { parseConfig } from "../src/config";
 import {
   closeEmbeddingStorage,
@@ -11,6 +12,8 @@ import {
   type EmbeddingStorage,
 } from "../src/embeddings/storage";
 import type { EmbeddingClient } from "../src/embeddings/openai";
+import { DdserveError } from "../src/errors";
+import type { SearchResponse, SearchResult } from "../src/search";
 import { createServerApp, resolveServeOptions } from "../src/server";
 import type { CacheManifestDocset, DocsetManifest, PageManifestEntry } from "../src/types";
 
@@ -556,6 +559,78 @@ describe("server API", () => {
     });
   });
 
+  test("copilot session start returns installed docsets and top prompt matches", async () => {
+    const cacheRoot = await createTempCacheRoot();
+    await seedDocset(cacheRoot);
+    let seenQuery = "";
+    let seenLimit = 0;
+    const app = createServerApp({
+      cacheRoot,
+      config: parseConfig({}),
+      search: async (options) => {
+        seenQuery = options.query;
+        seenLimit = options.limit ?? 0;
+        return hookSearchResponse(options.query, cacheRoot, 5);
+      },
+    });
+
+    const response = await postCopilotSessionStart(app, { initialPrompt: "  hooks  " });
+    const body = (await response.json()) as { additionalContext: string };
+
+    expect(response.status).toBe(200);
+    expect(seenQuery).toBe("hooks");
+    expect(seenLimit).toBe(4);
+    expect(body.additionalContext).toContain("Installed docsets (1):");
+    expect(body.additionalContext).toContain("- http: HTTP (1 page)");
+    expect(body.additionalContext).toContain("Prompt-specific matches (4):");
+    expect(body.additionalContext).toContain("1. http/overview-1 — HTTP Overview 1 (semantic 0.9)");
+    expect(body.additionalContext).toContain("4. http/overview-4 — HTTP Overview 4 (semantic 0.87)");
+    expect(body.additionalContext).toContain("Links: page /api/docsets/http/pages/overview-1; content /api/docsets/http/pages/overview-1/content");
+    expect(body.additionalContext).not.toContain("overview-5");
+    expect(JSON.stringify(body)).not.toContain("pageFilePath");
+    expect(JSON.stringify(body)).not.toContain(cacheRoot);
+  });
+
+  test("copilot session start skips prompt matches for blank prompts", async () => {
+    const cacheRoot = await createTempCacheRoot();
+    await seedDocset(cacheRoot);
+    const app = createServerApp({
+      cacheRoot,
+      config: parseConfig({}),
+      search: async () => {
+        throw new Error("search should not run for blank prompts");
+      },
+    });
+
+    const response = await postCopilotSessionStart(app, { initialPrompt: "   " });
+    const body = (await response.json()) as { additionalContext: string };
+
+    expect(response.status).toBe(200);
+    expect(body.additionalContext).toContain("- http: HTTP (1 page)");
+    expect(body.additionalContext).toContain("Prompt-specific matches skipped: no initial prompt was provided.");
+  });
+
+  test("copilot session start falls back to docsets when prompt search errors", async () => {
+    const cacheRoot = await createTempCacheRoot();
+    await seedDocset(cacheRoot);
+    const app = createServerApp({
+      cacheRoot,
+      config: parseConfig({}),
+      search: async () => {
+        throw new DdserveError(`Search index could not be read from ${cacheRoot}/embeddings.sqlite`);
+      },
+    });
+
+    const response = await postCopilotSessionStart(app, { initialPrompt: "hooks" });
+    const body = (await response.json()) as { additionalContext: string };
+
+    expect(response.status).toBe(200);
+    expect(body.additionalContext).toContain("- http: HTTP (1 page)");
+    expect(body.additionalContext).toContain("Prompt-specific matches unavailable: Request could not be completed.");
+    expect(JSON.stringify(body)).not.toContain("embeddings.sqlite");
+    expect(JSON.stringify(body)).not.toContain(cacheRoot);
+  });
+
   test("enforces optional bearer auth and configurable CORS", async () => {
     const cacheRoot = await createTempCacheRoot();
     await seedDocset(cacheRoot);
@@ -613,6 +688,25 @@ describe("server API", () => {
     expect(authorizedMcp.status).toBe(200);
     expect(authorizedMcp.headers.get("access-control-allow-origin")).toBe("http://client.test");
     expect(authorizedMcp.headers.get("access-control-expose-headers")).toContain("mcp-protocol-version");
+
+    const unauthorizedHook = await postCopilotSessionStart(app, {}, { origin: "http://client.test" });
+    expect(unauthorizedHook.status).toBe(401);
+    expect(unauthorizedHook.headers.get("access-control-allow-origin")).toBe("http://client.test");
+
+    const authorizedHook = await postCopilotSessionStart(
+      app,
+      {},
+      {
+        authorization: "Bearer secret",
+        origin: "http://client.test",
+      },
+    );
+    const authorizedHookBody = await authorizedHook.json();
+    expect(authorizedHook.status).toBe(200);
+    expect(authorizedHook.headers.get("access-control-allow-origin")).toBe("http://client.test");
+    expect(authorizedHookBody).toMatchObject({
+      additionalContext: expect.stringContaining("Installed docsets (1):"),
+    });
   });
 
   test("responds to configured CORS preflight requests", async () => {
@@ -655,9 +749,23 @@ describe("server API", () => {
     const app = createServerApp({ cacheRoot, config: parseConfig({}) });
 
     const response = await app.handle(new Request("http://evil.test/api"));
+    const hookResponse = await app.handle(
+      new Request(`http://evil.test${COPILOT_SESSION_START_HOOK_PATH}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "{}",
+      }),
+    );
 
     expect(response.status).toBe(403);
     expect(await response.json()).toEqual({
+      error: {
+        code: "forbidden",
+        message: "Host header is not allowed",
+      },
+    });
+    expect(hookResponse.status).toBe(403);
+    expect(await hookResponse.json()).toEqual({
       error: {
         code: "forbidden",
         message: "Host header is not allowed",
@@ -747,6 +855,35 @@ function upsertSearchFixture(storage: EmbeddingStorage): void {
   });
 }
 
+function hookSearchResponse(query: string, cacheRoot: string, count: number): SearchResponse {
+  return {
+    query,
+    mode: "semantic",
+    model: "model-a",
+    dimensions: 2,
+    results: Array.from({ length: count }, (_, index) => hookSearchResult(index + 1, cacheRoot)),
+  };
+}
+
+function hookSearchResult(index: number, cacheRoot: string): SearchResult {
+  return {
+    score: 0.91 - index / 100,
+    mode: "semantic",
+    docsetSlug: "http",
+    docsetName: "HTTP",
+    pageId: `overview-${index}`,
+    pageName: `HTTP Overview ${index}`,
+    pagePath: `overview-${index}`,
+    pageType: "Guide",
+    pageFilePath: join(cacheRoot, "docs", "http", "pages", `overview-${index}.md`),
+    chunkId: index,
+    chunkOrdinal: 0,
+    chunkContentHash: `chunk-hash-${index}`,
+    snippet: `hook docs snippet ${index}`,
+    text: `hook docs text ${index}`,
+  };
+}
+
 function cacheDocsetSummary(): CacheManifestDocset {
   return {
     source: "devdocs",
@@ -823,6 +960,23 @@ function postMcp(
       method: "POST",
       headers: {
         accept: "application/json, text/event-stream",
+        "content-type": "application/json",
+        ...headers,
+      },
+      body: JSON.stringify(body),
+    }),
+  );
+}
+
+function postCopilotSessionStart(
+  app: ReturnType<typeof createServerApp>,
+  body: Record<string, unknown>,
+  headers: Record<string, string> = {},
+): Promise<Response> {
+  return app.handle(
+    new Request(`http://localhost${COPILOT_SESSION_START_HOOK_PATH}`, {
+      method: "POST",
+      headers: {
         "content-type": "application/json",
         ...headers,
       },

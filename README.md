@@ -248,11 +248,11 @@ Broad semantic search currently brute-forces vectors in the selected scope. Pref
 
 ## REST API server
 
-Start the server:
+Start the server. The default `127.0.0.1:43877` address is also used by the local Copilot CLI plugin:
 
 ```sh
 bun run ddserve serve
-bun run ddserve serve --host 0.0.0.0 --port 43877
+bun run ddserve serve --host 127.0.0.1 --port 43877
 ```
 
 Example requests:
@@ -283,9 +283,11 @@ Endpoints:
 | `POST /api/search` | Search with JSON body: `query`, optional `slugs` array, optional `languages` array, optional `limit`. |
 | `GET /api/embeddings/status?detail=full` | Read-only embedding status. Without `detail=full`, expensive current/stale/missing recomputation is omitted. |
 | `GET /api/embeddings/status/:slug?detail=full` | Read-only per-docset embedding status. |
+| `POST /copilot/hooks/sessionStart` | Copilot CLI session-start hook. Returns installed docsets plus snippets and links for up to the top 4 prompt-relevant docs, not full page content. |
 | `POST /mcp` | MCP Streamable HTTP endpoint for read-only documentation tools and resources. |
 
 The API is read-only. It does not install, update, refresh, rebuild, or otherwise mutate docsets or embeddings. API search results include stable IDs and links, but intentionally do not expose local cache file paths.
+The hook endpoint is read-only and uses the same host-header protection, bearer auth, and CORS configuration as `/api` and `/mcp`.
 
 ### MCP endpoint
 
@@ -309,13 +311,13 @@ This repository can be installed as a local GitHub Copilot CLI plugin:
 copilot plugin install .
 ```
 
-The plugin manifest in `plugin.json` loads the MCP server configuration from `.mcp.json`, which points Copilot CLI at the local `ddserve serve` endpoint. Start `ddserve` before using the plugin-provided MCP tools:
+The plugin manifest in `plugin.json` loads the MCP server configuration from `.mcp.json` and hook configuration from `hooks.json`. Both files point Copilot CLI at `http://127.0.0.1:43877`, so start `ddserve` before using the plugin-provided MCP tools or session-start hook:
 
 ```sh
 bun run ddserve serve --host 127.0.0.1 --port 43877
 ```
 
-Reinstall the local plugin after changing plugin files so Copilot CLI refreshes its cached copy.
+Because the hook uses local non-TLS HTTP, run Copilot CLI with `COPILOT_HOOK_ALLOW_LOCALHOST=1` in its environment. If you run `ddserve` on a custom port, edit `.mcp.json` and `hooks.json` before installing the plugin. Reinstall the local plugin after changing plugin files so Copilot CLI refreshes its cached copy.
 
 ## Development
 

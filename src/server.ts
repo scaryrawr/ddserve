@@ -8,6 +8,10 @@ import {
   DEFAULT_SERVE_PORT,
   type DdserveConfig,
 } from "./config";
+import {
+  COPILOT_SESSION_START_HOOK_PATH,
+  sessionStartHookDto,
+} from "./copilot-hooks";
 import { getEmbeddingsStatus } from "./embeddings";
 import type { EmbeddingClient } from "./embeddings/openai";
 import { DdserveError } from "./errors";
@@ -178,6 +182,9 @@ export function createServerApp(options: CreateServerAppOptions): AnyElysia {
           }),
         );
       }),
+    )
+    .post(COPILOT_SESSION_START_HOOK_PATH, ({ request, body }) =>
+      handleApiRequest(runtime, request, async () => sessionStartHookDto(runtime, body)),
     )
     .options(MCP_ENDPOINT_PATH, ({ request }) => corsPreflightResponse(runtime, request))
     .all(MCP_ENDPOINT_PATH, ({ request, body }) =>

@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      {
+        "type": "http",
+        "url": "http://127.0.0.1:43877/copilot/hooks/sessionStart",
+        "timeoutSec": 5
+      }
+    ]
+  }
+}
