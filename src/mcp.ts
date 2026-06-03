@@ -76,7 +76,7 @@ function createDdserveMcpServer(runtime: ServerOperationRuntime): McpServer {
     {
       title: "Search documentation",
       description:
-        "Search installed DevDocs documentation chunks. Requires configured embeddings and uses the same semantic/keyword behavior as ddserve search.",
+        "Search available DevDocs documentation for pages relevant to a query.",
       inputSchema: searchDocsInputSchema,
       annotations: {
         readOnlyHint: true,
