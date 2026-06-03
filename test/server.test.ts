@@ -44,6 +44,21 @@ describe("server API", () => {
     expect(JSON.stringify(body)).not.toContain(cacheRoot);
   });
 
+  test("advertises the MCP endpoint from API metadata", async () => {
+    const cacheRoot = await createTempCacheRoot();
+    const app = createServerApp({ cacheRoot, config: parseConfig({}) });
+
+    const response = await app.handle(new Request("http://localhost/api"));
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body).toMatchObject({
+      links: {
+        mcp: "/mcp",
+      },
+    });
+  });
+
   test("fetches full and line-ranged page content through manifest page IDs", async () => {
     const cacheRoot = await createTempCacheRoot();
     await seedDocset(cacheRoot);
@@ -219,6 +234,203 @@ describe("server API", () => {
     expect(body.results[0]?.docsetSlug).toBe("http");
   });
 
+    test("serves MCP tools and resource templates over stateless Streamable HTTP", async () => {
+      const cacheRoot = await createTempCacheRoot();
+      await seedDocset(cacheRoot);
+      const app = createServerApp({ cacheRoot, config: parseConfig({}) });
+
+      const initialize = await postMcp(app, {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          protocolVersion: "2025-06-18",
+          capabilities: {},
+          clientInfo: { name: "ddserve-test", version: "1.0.0" },
+        },
+      });
+      const initializeBody = await initialize.json();
+      expect(initialize.status).toBe(200);
+      expect(initializeBody).toMatchObject({
+        jsonrpc: "2.0",
+        id: 1,
+        result: {
+          serverInfo: {
+            name: "ddserve",
+          },
+        },
+      });
+
+      const tools = await postMcp(app, {
+        jsonrpc: "2.0",
+        id: 2,
+        method: "tools/list",
+      });
+      const toolsBody = (await tools.json()) as { result: { tools: Array<{ name: string }> } };
+      expect(tools.status).toBe(200);
+      expect(toolsBody.result.tools.map((tool) => tool.name).sort()).toEqual(["get_page_content", "search_docs"]);
+
+      const resourceTemplates = await postMcp(app, {
+        jsonrpc: "2.0",
+        id: 3,
+        method: "resources/templates/list",
+      });
+      const resourceTemplatesBody = await resourceTemplates.json();
+      expect(resourceTemplates.status).toBe(200);
+      expect(resourceTemplatesBody).toMatchObject({
+        result: {
+          resourceTemplates: [
+            expect.objectContaining({
+              uriTemplate: "ddserve://docsets/{slug}/pages/{pageId}",
+              mimeType: "text/markdown",
+            }),
+          ],
+        },
+      });
+    });
+
+    test("MCP search returns sanitized structured results and page resource links", async () => {
+      const cacheRoot = await createTempCacheRoot();
+      await seedDocset(cacheRoot);
+      const storage = await openEmbeddingStorage(cacheRoot);
+
+      try {
+        upsertSearchFixture(storage);
+      } finally {
+        closeEmbeddingStorage(storage);
+      }
+
+      const app = createServerApp({
+        cacheRoot,
+        config: parseConfig({
+          openai: { embeddingModel: "model-a" },
+          embeddings: { enabled: true },
+        }),
+        embeddingClient: vectorEmbeddingClient([1, 0]),
+      });
+
+      const response = await postMcp(app, {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: {
+          name: "search_docs",
+          arguments: { query: "hooks", slugs: ["http"], limit: 1 },
+        },
+      });
+      const body = (await response.json()) as {
+        result: {
+          content: Array<Record<string, unknown>>;
+          structuredContent: {
+            results: Array<Record<string, unknown>>;
+          };
+        };
+      };
+
+      expect(response.status).toBe(200);
+      expect(body.result.structuredContent.results[0]).toMatchObject({
+        docsetSlug: "http",
+        pageId: "overview",
+        pageName: "HTTP Overview",
+        snippet: "hooks protocol docs",
+      });
+      expect(body.result.content).toContainEqual(
+        expect.objectContaining({
+          type: "resource_link",
+          uri: "ddserve://docsets/http/pages/overview",
+          mimeType: "text/markdown",
+        }),
+      );
+      expect(body.result.structuredContent.results[0]).not.toHaveProperty("pageFilePath");
+      expect(JSON.stringify(body)).not.toContain(cacheRoot);
+    });
+
+    test("MCP get_page_content and resource reads return Markdown content", async () => {
+      const cacheRoot = await createTempCacheRoot();
+      await seedDocset(cacheRoot, {
+        pages: [pageEntry({ id: "guide/hooks" })],
+      });
+      const app = createServerApp({ cacheRoot, config: parseConfig({}) });
+
+      const toolResponse = await postMcp(app, {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: {
+          name: "get_page_content",
+          arguments: { slug: "http", pageId: "guide/hooks", startLine: 3, endLine: 4 },
+        },
+      });
+      const toolBody = await toolResponse.json();
+
+      expect(toolResponse.status).toBe(200);
+      expect(toolBody).toMatchObject({
+        result: {
+          content: [{ type: "text", text: "Protocol docs.\nHeader details." }],
+          structuredContent: {
+            docsetSlug: "http",
+            startLine: 3,
+            endLine: 4,
+            totalLines: 6,
+          },
+        },
+      });
+
+      const resourceResponse = await postMcp(app, {
+        jsonrpc: "2.0",
+        id: 2,
+        method: "resources/read",
+        params: {
+          uri: "ddserve://docsets/http/pages/guide%2Fhooks",
+        },
+      });
+      const resourceBody = await resourceResponse.json();
+
+      expect(resourceResponse.status).toBe(200);
+      expect(resourceBody).toMatchObject({
+        result: {
+          contents: [
+            expect.objectContaining({
+              uri: "ddserve://docsets/http/pages/guide%2Fhooks",
+              mimeType: "text/markdown",
+              text: expect.stringContaining("# HTTP Overview"),
+            }),
+          ],
+        },
+      });
+      expect(JSON.stringify(resourceBody)).not.toContain(cacheRoot);
+    });
+
+    test("MCP tool errors sanitize path-bearing internal failures", async () => {
+      const cacheRoot = await createTempCacheRoot();
+      await seedDocset(cacheRoot, {
+        pages: [pageEntry({ id: "escape", file: "../outside.md" })],
+      });
+      await writeFile(join(cachePaths(cacheRoot).docsRoot, "outside.md"), "outside secret", "utf8");
+      const app = createServerApp({ cacheRoot, config: parseConfig({}) });
+
+      const response = await postMcp(app, {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: {
+          name: "get_page_content",
+          arguments: { slug: "http", pageId: "escape" },
+        },
+      });
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body).toMatchObject({
+        result: {
+          isError: true,
+          content: [{ type: "text", text: "Request could not be completed" }],
+        },
+      });
+      expect(JSON.stringify(body)).not.toContain("outside secret");
+      expect(JSON.stringify(body)).not.toContain(cacheRoot);
+    });
+
   test("omits filesystem paths from embeddings status", async () => {
     const cacheRoot = await createTempCacheRoot();
     await seedDocset(cacheRoot);
@@ -327,6 +539,33 @@ describe("server API", () => {
     );
     expect(authorized.status).toBe(200);
     expect(authorized.headers.get("access-control-allow-origin")).toBe("http://client.test");
+
+    const unauthorizedMcp = await postMcp(
+      app,
+      {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/list",
+      },
+      { origin: "http://client.test" },
+    );
+    expect(unauthorizedMcp.status).toBe(401);
+
+    const authorizedMcp = await postMcp(
+      app,
+      {
+        jsonrpc: "2.0",
+        id: 2,
+        method: "tools/list",
+      },
+      {
+        authorization: "Bearer secret",
+        origin: "http://client.test",
+      },
+    );
+    expect(authorizedMcp.status).toBe(200);
+    expect(authorizedMcp.headers.get("access-control-allow-origin")).toBe("http://client.test");
+    expect(authorizedMcp.headers.get("access-control-expose-headers")).toContain("mcp-protocol-version");
   });
 
   test("responds to configured CORS preflight requests", async () => {
@@ -350,6 +589,17 @@ describe("server API", () => {
     expect(response.status).toBe(204);
     expect(response.headers.get("access-control-allow-origin")).toBe("http://client.test");
     expect(response.headers.get("access-control-allow-methods")).toContain("GET");
+
+    const mcpResponse = await app.handle(
+      new Request("http://localhost/mcp", {
+        method: "OPTIONS",
+        headers: { origin: "http://client.test" },
+      }),
+    );
+
+    expect(mcpResponse.status).toBe(204);
+    expect(mcpResponse.headers.get("access-control-allow-methods")).toContain("DELETE");
+    expect(mcpResponse.headers.get("access-control-allow-headers")).toContain("mcp-protocol-version");
   });
 
   test("rejects unexpected host headers on localhost binds", async () => {
@@ -514,4 +764,22 @@ function vectorEmbeddingClient(vector: number[]): EmbeddingClient {
       return Array.from({ length: count }, () => [...vector]);
     },
   };
+}
+
+function postMcp(
+  app: ReturnType<typeof createServerApp>,
+  body: Record<string, unknown>,
+  headers: Record<string, string> = {},
+): Promise<Response> {
+  return app.handle(
+    new Request("http://localhost/mcp", {
+      method: "POST",
+      headers: {
+        accept: "application/json, text/event-stream",
+        "content-type": "application/json",
+        ...headers,
+      },
+      body: JSON.stringify(body),
+    }),
+  );
 }

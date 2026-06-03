@@ -1,6 +1,6 @@
 # ddserve
 
-`ddserve` is a Bun + TypeScript CLI for mirroring [DevDocs](https://devdocs.io/) docsets into a local Markdown cache, indexing those pages with OpenAI-compatible embeddings, searching the indexed chunks, and serving the cached documentation through a read-only JSON API.
+`ddserve` is a Bun + TypeScript CLI for mirroring [DevDocs](https://devdocs.io/) docsets into a local Markdown cache, indexing those pages with OpenAI-compatible embeddings, searching the indexed chunks, and serving the cached documentation through a read-only JSON API and MCP endpoint.
 
 It is currently a local project/package rather than a published npm package.
 
@@ -12,7 +12,7 @@ It is currently a local project/package rather than a published npm package.
 - Updates one docset or every installed docset, with per-docset install locks.
 - Stores embedding chunks and vectors in a local SQLite database.
 - Searches indexed chunks semantically, with keyword fallback when no vectors exist for the configured model/scope.
-- Exposes installed docsets, Markdown page content, search, and embedding status through a read-only REST API.
+- Exposes installed docsets, Markdown page content, search, embedding status, and MCP tools/resources through a read-only HTTP server.
 
 ## Requirements
 
@@ -147,7 +147,7 @@ The `serve` block configures `ddserve serve`.
 - Default bind address/port are `127.0.0.1:43877`.
 - CLI `--host` and `--port` override config values.
 - Set `bindAddress` to `0.0.0.0` only when you intend remote clients to connect.
-- If `serve.auth` is present, API routes under `/api` require `Authorization: Bearer <token>`. The token is read from `tokenEnv` or inline `token`; inline tokens are redacted by `config show`.
+- If `serve.auth` is present, API routes under `/api` and the MCP endpoint at `/mcp` require `Authorization: Bearer <token>`. The token is read from `tokenEnv` or inline `token`; inline tokens are redacted by `config show`.
 - `serve.cors.origins` accepts a string or array of strings. CORS is disabled unless origins are configured; `"*"` is allowed.
 
 When bound to a specific local address, the server rejects unexpected `Host` headers. Binding to `0.0.0.0` or `::` disables that host allow-list check.
@@ -264,6 +264,8 @@ curl 'http://127.0.0.1:43877/api/search?q=request%20headers&slug=http'
 curl 'http://127.0.0.1:43877/api/docsets/http/pages?limit=20&q=headers'
 # Replace <page-id> with an id returned by the pages endpoint.
 curl 'http://127.0.0.1:43877/api/docsets/http/pages/<page-id>/content?startLine=1&endLine=20'
+# MCP clients can connect to the stateless Streamable HTTP endpoint:
+# http://127.0.0.1:43877/mcp
 ```
 
 Endpoints:
@@ -281,8 +283,23 @@ Endpoints:
 | `POST /api/search` | Search with JSON body: `query`, optional `slugs` array, optional `languages` array, optional `limit`. |
 | `GET /api/embeddings/status?detail=full` | Read-only embedding status. Without `detail=full`, expensive current/stale/missing recomputation is omitted. |
 | `GET /api/embeddings/status/:slug?detail=full` | Read-only per-docset embedding status. |
+| `POST /mcp` | MCP Streamable HTTP endpoint for read-only documentation tools and resources. |
 
 The API is read-only. It does not install, update, refresh, rebuild, or otherwise mutate docsets or embeddings. API search results include stable IDs and links, but intentionally do not expose local cache file paths.
+
+### MCP endpoint
+
+`ddserve serve` also exposes a stateless MCP Streamable HTTP endpoint at `/mcp`. It uses the same cache, search index, host-header protection, bearer auth, and CORS configuration as the REST API.
+
+Available MCP capabilities:
+
+| Capability | Description |
+| --- | --- |
+| Tool `search_docs` | Searches installed documentation with `query`, optional `slugs`, optional `languages`, and optional `limit` (max `50`). Results include sanitized structured metadata and `ddserve://` page resource links. |
+| Tool `get_page_content` | Reads Markdown content for `slug` and `pageId`, with optional 1-based `startLine` and `endLine`. |
+| Resource `ddserve://docsets/{slug}/pages/{pageId}` | Reads full Markdown content for a page linked from search results. Page IDs in resource URIs are URL-encoded. |
+
+MCP search has the same prerequisites and fallback behavior as REST/CLI search: embeddings must be configured to embed the query, semantic results are returned when vectors exist for the selected scope, and keyword fallback only searches chunks already indexed in SQLite.
 
 ## Development
 
