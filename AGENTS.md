@@ -10,7 +10,7 @@ Use Bun for all local commands; do not substitute npm/node runners.
 
 - `bun install` — install dependencies from `bun.lock`.
 - `bun run ddserve --help` — run the checkout CLI.
-- `bun run ddserve docs install <slug>` / `docs update [slug]` / `docs remove <slug>` — mutate the local doc cache.
+- `bun run ddserve docs install <slug...>` / `docs update [slug]` / `docs remove <slug>` — mutate the local doc cache.
 - `bun run typecheck` — strict TypeScript validation via `tsgo --noEmit`.
 - `bun test` — full test suite.
 - `bun test test/config.test.ts` — narrow test command.

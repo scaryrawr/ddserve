@@ -3,7 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
-import { atomicWriteJson, cachePaths, pathExists, writeCacheManifest } from "../src/cache";
+import { atomicWriteJson, cachePaths, pathExists, readCacheManifest, writeCacheManifest } from "../src/cache";
 import { runCli } from "../src/cli";
 import {
   DEFAULT_EMBEDDING_BATCH_SIZE,
@@ -42,7 +42,7 @@ describe("runCli", () => {
 
     expect(output).toContain("sources list");
     expect(output).toContain("docs available");
-    expect(output).toContain("docs install <slug>");
+    expect(output).toContain("docs install <slug...>");
     expect(output).toContain("docs remove <slug>");
     expect(output).toContain("cache path");
     expect(output).toContain("embeddings status [slug]");
@@ -55,7 +55,7 @@ describe("runCli", () => {
     expect(output).toContain("Subcommands:");
     expect(output).toContain("available");
     expect(output).toContain("installed");
-    expect(output).toContain("install <slug>");
+    expect(output).toContain("install <slug...>");
     expect(output).toContain("remove <slug>");
     expect(output).toContain("update [slug]");
   });
@@ -260,6 +260,7 @@ describe("runCli", () => {
       stdout: (message) => {
         installOutput += message;
       },
+      stderr: () => {},
     });
 
     expect(installOutput).toContain("installed http (3 pages, 0 skipped)");
@@ -282,6 +283,82 @@ describe("runCli", () => {
     expect(status.missingChunks).toBe(0);
   });
 
+  test("installs multiple docsets from one CLI command", async () => {
+    const cacheRoot = join(testRoot, randomUUID(), "cache");
+    let output = "";
+    let stderr = "";
+
+    await runCli(["docs", "install", "http", "css"], {
+      env: { DDSERVE_CACHE_DIR: cacheRoot },
+      http: createMultiDocsetFixtureHttpClient({
+        http: {
+          name: "HTTP",
+          type: "http",
+          pages: { index: "<h1>HTTP</h1><p>Protocol docs.</p>" },
+        },
+        css: {
+          name: "CSS",
+          type: "css",
+          pages: {
+            index: "<h1>CSS</h1><p>Style docs.</p>",
+            selectors: "<h1>Selectors</h1><p>Class and ID selectors.</p>",
+          },
+        },
+      }),
+      config: defaultConfig(),
+      stdout: (message) => {
+        output += message;
+      },
+      stderr: (message) => {
+        stderr += message;
+      },
+    });
+
+    expect(output).toContain("installed http (1 pages, 0 skipped)");
+    expect(output).toContain("installed css (2 pages, 0 skipped)");
+    expect(stderr).toContain("Installing http (1/2)...");
+    expect(stderr).toContain("Finished http: installed (1 pages, 0 skipped)");
+    expect(stderr).toContain("Installing css (2/2)...");
+    expect(stderr).toContain("Finished css: installed (2 pages, 0 skipped)");
+
+    const manifest = await readCacheManifest(cacheRoot);
+    expect(Object.keys(manifest.docs).sort()).toEqual(["css", "http"]);
+    expect(manifest.docs.http?.pageCount).toBe(1);
+    expect(manifest.docs.css?.pageCount).toBe(2);
+  });
+
+  test("suppresses install progress for JSON output", async () => {
+    const cacheRoot = join(testRoot, randomUUID(), "cache");
+    let output = "";
+    let stderr = "";
+
+    await runCli(["docs", "install", "http", "css", "--json"], {
+      env: { DDSERVE_CACHE_DIR: cacheRoot },
+      http: createMultiDocsetFixtureHttpClient({
+        http: {
+          name: "HTTP",
+          type: "http",
+          pages: { index: "<h1>HTTP</h1><p>Protocol docs.</p>" },
+        },
+        css: {
+          name: "CSS",
+          type: "css",
+          pages: { index: "<h1>CSS</h1><p>Style docs.</p>" },
+        },
+      }),
+      config: defaultConfig(),
+      stdout: (message) => {
+        output += message;
+      },
+      stderr: (message) => {
+        stderr += message;
+      },
+    });
+
+    expect(JSON.parse(output).map((result: { slug: string }) => result.slug)).toEqual(["http", "css"]);
+    expect(stderr).toBe("");
+  });
+
   test("removes an installed docset from the CLI", async () => {
     const cacheRoot = join(testRoot, randomUUID(), "cache");
     const http = createFixtureHttpClient();
@@ -291,6 +368,7 @@ describe("runCli", () => {
       http,
       config: defaultConfig(),
       stdout: () => {},
+      stderr: () => {},
     });
 
     let output = "";
@@ -328,6 +406,7 @@ describe("runCli", () => {
       http,
       config: defaultConfig(),
       stdout: () => {},
+      stderr: () => {},
     });
 
     let stderr = "";
@@ -361,6 +440,7 @@ describe("runCli", () => {
       http,
       config: defaultConfig(),
       stdout: () => {},
+      stderr: () => {},
     });
 
     let output = "";
@@ -407,6 +487,7 @@ describe("runCli", () => {
       http,
       config: defaultConfig(),
       stdout: () => {},
+      stderr: () => {},
     });
 
     let output = "";
@@ -457,6 +538,7 @@ describe("runCli", () => {
       http,
       config: defaultConfig(),
       stdout: () => {},
+      stderr: () => {},
     });
 
     let firstOutput = "";
@@ -891,14 +973,39 @@ function searchChunk(
   };
 }
 
+interface FixtureDocset {
+  name: string;
+  type: string;
+  pages: Record<string, string>;
+}
+
 function createFixtureHttpClient(pages: Record<string, string> = { index: "<h1>HTTP</h1><p>Protocol docs.</p>" }): HttpClient {
-  const fixtures: Record<string, unknown> = {
-    "https://devdocs.io/docs.json": [{ name: "HTTP", slug: "http", type: "http", release: "1", mtime: 10 }],
-    "https://documents.devdocs.io/http/index.json": {
-      entries: Object.keys(pages).map((path) => ({ name: pageName(path), path, type: "HTTP" })),
+  return createMultiDocsetFixtureHttpClient({
+    http: {
+      name: "HTTP",
+      type: "http",
+      pages,
     },
-    "https://documents.devdocs.io/http/db.json": pages,
+  });
+}
+
+function createMultiDocsetFixtureHttpClient(docsets: Record<string, FixtureDocset>): HttpClient {
+  const fixtures: Record<string, unknown> = {
+    "https://devdocs.io/docs.json": Object.entries(docsets).map(([slug, docset], index) => ({
+      name: docset.name,
+      slug,
+      type: docset.type,
+      release: String(index + 1),
+      mtime: index + 10,
+    })),
   };
+
+  for (const [slug, docset] of Object.entries(docsets)) {
+    fixtures[`https://documents.devdocs.io/${slug}/index.json`] = {
+      entries: Object.keys(docset.pages).map((path) => ({ name: pageName(path), path, type: docset.name })),
+    };
+    fixtures[`https://documents.devdocs.io/${slug}/db.json`] = docset.pages;
+  }
 
   return {
     async fetchJson<T>(url: string): Promise<T> {

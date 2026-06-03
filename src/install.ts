@@ -71,6 +71,18 @@ export interface RemoveResult {
   removedEmbeddings: DeleteEmbeddingDocsetResult;
 }
 
+export interface InstallProgressEvent {
+  slug: string;
+  index: number;
+  total: number;
+  phase: "start" | "done";
+  result?: InstallResult;
+}
+
+export interface InstallManyOptions extends InstallOptions {
+  onProgress?: (event: InstallProgressEvent) => void;
+}
+
 const EMPTY_EMBEDDING_REMOVAL_RESULT: DeleteEmbeddingDocsetResult = {
   deletedDocsets: 0,
   deletedPages: 0,
@@ -221,16 +233,22 @@ export async function removeDocset(slug: string, options: RemoveOptions): Promis
   }
 }
 
-export interface UpdateProgressEvent {
-  slug: string;
-  index: number;
-  total: number;
-  phase: "start" | "done";
-  result?: InstallResult;
-}
+export type UpdateProgressEvent = InstallProgressEvent;
 
 export interface UpdateOptions extends InstallOptions {
   onProgress?: (event: UpdateProgressEvent) => void;
+}
+
+export async function installDocsets(slugs: readonly string[], options: InstallManyOptions): Promise<InstallResult[]> {
+  const results: InstallResult[] = [];
+  for (const [index, slug] of slugs.entries()) {
+    const progress = { slug, index: index + 1, total: slugs.length };
+    options.onProgress?.({ ...progress, phase: "start" });
+    const result = await installDocset(slug, options);
+    options.onProgress?.({ ...progress, phase: "done", result });
+    results.push(result);
+  }
+  return results;
 }
 
 export async function updateDocsets(slug: string | undefined, options: UpdateOptions): Promise<InstallResult[]> {

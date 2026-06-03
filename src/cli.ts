@@ -6,7 +6,7 @@ import { loadConfig, redactConfig, resolveConfigPath, type DdserveConfig } from 
 import { DdserveError } from "./errors";
 import { formatBytes, formatTable, type TableColumn } from "./format";
 import { getAvailableDocsets } from "./devdocs";
-import { installDocset, removeDocset, updateDocsets } from "./install";
+import { installDocsets, removeDocset, updateDocsets, type InstallResult } from "./install";
 import { getEmbeddingsStatus, rebuildEmbeddings, refreshEmbeddings, type EmbeddingsStatusResult } from "./embeddings";
 import type { EmbeddingClient } from "./embeddings/openai";
 import type { HttpClient } from "./http";
@@ -69,11 +69,11 @@ const SUBCOMMAND_HELP_GROUPS: readonly SubcommandHelpGroup[] = [
   },
   {
     command: "docs",
-    rawName: "docs [subcommand] [slug]",
+    rawName: "docs [subcommand] [...slugs]",
     entries: [
       { name: "available", description: "List available DevDocs docsets" },
       { name: "installed", description: "List installed DevDocs docsets" },
-      { name: "install <slug>", description: "Install a DevDocs docset" },
+      { name: "install <slug...>", description: "Install one or more DevDocs docsets" },
       { name: "remove <slug>", description: "Remove an installed DevDocs docset" },
       { name: "update [slug]", description: "Update installed DevDocs docsets" },
     ],
@@ -138,11 +138,13 @@ export async function runCli(argv: string[] = process.argv.slice(2), deps: CliDe
     });
 
   cli
-    .command("docs [subcommand] [slug]", "Manage DevDocs docsets")
+    .command("docs [subcommand] [...slugs]", "Manage DevDocs docsets")
     .option("--json", "Print JSON")
     .option("--offline", "Use the cached DevDocs index without refreshing")
     .option("--force", "Reinstall even when cached docsets appear current")
-    .action(async (subcommand: string | undefined, slug: string | undefined, options: CommandOptions) => {
+    .action(async (subcommand: string | undefined, slugs: string[] | undefined, options: CommandOptions) => {
+      const docsetSlugs = slugs ?? [];
+
       if (subcommand === "available") {
         const result = await getAvailableDocsets({
           cacheRoot,
@@ -183,66 +185,88 @@ export async function runCli(argv: string[] = process.argv.slice(2), deps: CliDe
       }
 
       if (subcommand === "installed") {
-      await ensureCacheRoot(cacheRoot);
-      const manifest = await readCacheManifest(cacheRoot);
-      const docs = Object.values(manifest.docs).sort((left, right) => left.slug.localeCompare(right.slug));
+        await ensureCacheRoot(cacheRoot);
+        const manifest = await readCacheManifest(cacheRoot);
+        const docs = Object.values(manifest.docs).sort((left, right) => left.slug.localeCompare(right.slug));
 
-      if (options.json) {
-        writeOutput(stdout, JSON.stringify(docs, null, 2));
-        return;
-      }
+        if (options.json) {
+          writeOutput(stdout, JSON.stringify(docs, null, 2));
+          return;
+        }
 
-      if (docs.length === 0) {
-        writeOutput(stdout, "No docsets installed.");
-        return;
-      }
+        if (docs.length === 0) {
+          writeOutput(stdout, "No docsets installed.");
+          return;
+        }
 
-      writeOutput(
-        stdout,
-        formatTable(docs, [
-          { header: "slug", value: (row) => row.slug },
-          { header: "name", value: (row) => row.name },
-          { header: "release", value: (row) => row.release ?? row.version },
-          { header: "pages", value: (row) => row.pageCount },
-          { header: "updated", value: (row) => row.updatedAt },
-        ]),
-      );
+        writeOutput(
+          stdout,
+          formatTable(docs, [
+            { header: "slug", value: (row) => row.slug },
+            { header: "name", value: (row) => row.name },
+            { header: "release", value: (row) => row.release ?? row.version },
+            { header: "pages", value: (row) => row.pageCount },
+            { header: "updated", value: (row) => row.updatedAt },
+          ]),
+        );
         return;
       }
 
       if (subcommand === "install") {
-        if (!slug) {
-          throw new DdserveError('Missing docset slug. Try "ddserve docs install <slug>".');
+        if (docsetSlugs.length === 0) {
+          throw new DdserveError('Missing docset slug. Try "ddserve docs install <slug...>".');
         }
 
-      const result = await installDocset(slug, {
-        cacheRoot,
-        http: deps.http,
-        force: options.force,
-        offline: options.offline,
-        now: deps.now,
-        configPath: options.config,
-        config: deps.config,
-        env: deps.env,
-        embeddingClient: deps.embeddingClient,
-      });
+        const results = await installDocsets(docsetSlugs, {
+          cacheRoot,
+          http: deps.http,
+          force: options.force,
+          offline: options.offline,
+          now: deps.now,
+          configPath: options.config,
+          config: deps.config,
+          env: deps.env,
+          embeddingClient: deps.embeddingClient,
+          onProgress: (event) => {
+            if (options.json) {
+              return;
+            }
 
-      for (const warning of result.warnings) {
-        stderr(`${warning}\n`);
-      }
+            if (event.phase === "start") {
+              stderr(`Installing ${event.slug} (${event.index}/${event.total})...\n`);
+              return;
+            }
 
-      writeOutput(
-        stdout,
-        options.json
-          ? JSON.stringify(result, null, 2)
-          : `${result.status} ${result.slug} (${result.pages} pages, ${result.skippedEntries} skipped)`,
-      );
+            if (event.result) {
+              stderr(
+                `Finished ${event.slug}: ${event.result.status} (${event.result.pages} pages, ${event.result.skippedEntries} skipped)\n`,
+              );
+            }
+          },
+        });
+
+        for (const result of results) {
+          for (const warning of result.warnings) {
+            stderr(`${warning}\n`);
+          }
+        }
+
+        writeOutput(
+          stdout,
+          options.json
+            ? JSON.stringify(results.length === 1 ? results[0] : results, null, 2)
+            : results.map(formatInstallResult).join("\n"),
+        );
         return;
       }
 
       if (subcommand === "remove") {
+        const slug = docsetSlugs[0];
         if (!slug) {
           throw new DdserveError('Missing docset slug. Try "ddserve docs remove <slug>".');
+        }
+        if (docsetSlugs.length > 1) {
+          throw new DdserveError('Remove accepts one docset slug. Try "ddserve docs remove <slug>".');
         }
 
         const result = await removeDocset(slug, {
@@ -258,64 +282,69 @@ export async function runCli(argv: string[] = process.argv.slice(2), deps: CliDe
       }
 
       if (subcommand === "update") {
-      const results = await updateDocsets(slug, {
-        cacheRoot,
-        http: deps.http,
-        force: options.force,
-        offline: options.offline,
-        now: deps.now,
-        configPath: options.config,
-        config: deps.config,
-        env: deps.env,
-        embeddingClient: deps.embeddingClient,
-        onProgress: (event) => {
-          if (options.json) {
-            return;
-          }
-
-          if (event.phase === "start") {
-            stderr(`Updating ${event.slug} (${event.index}/${event.total})...\n`);
-            return;
-          }
-
-          if (event.result) {
-            stderr(
-              `Finished ${event.slug}: ${event.result.status} (${event.result.pages} pages, ${event.result.skippedEntries} skipped)\n`,
-            );
-          }
-        },
-      });
-
-       for (const result of results) {
-        for (const warning of result.warnings) {
-          stderr(`${warning}\n`);
+        const slug = docsetSlugs[0];
+        if (docsetSlugs.length > 1) {
+          throw new DdserveError('Update accepts at most one docset slug. Try "ddserve docs update [slug]".');
         }
-       }
 
-       if (options.json) {
-        writeOutput(stdout, JSON.stringify(results, null, 2));
-        return;
-       }
+        const results = await updateDocsets(slug, {
+          cacheRoot,
+          http: deps.http,
+          force: options.force,
+          offline: options.offline,
+          now: deps.now,
+          configPath: options.config,
+          config: deps.config,
+          env: deps.env,
+          embeddingClient: deps.embeddingClient,
+          onProgress: (event) => {
+            if (options.json) {
+              return;
+            }
 
-      if (results.length === 0) {
-        writeOutput(stdout, "No docsets installed.");
-        return;
-      }
+            if (event.phase === "start") {
+              stderr(`Updating ${event.slug} (${event.index}/${event.total})...\n`);
+              return;
+            }
 
-      writeOutput(
-        stdout,
-        formatTable(results, [
-          { header: "slug", value: (row) => row.slug },
-          { header: "status", value: (row) => row.status },
-          { header: "pages", value: (row) => row.pages },
-          { header: "skipped", value: (row) => row.skippedEntries },
-        ]),
-      );
+            if (event.result) {
+              stderr(
+                `Finished ${event.slug}: ${event.result.status} (${event.result.pages} pages, ${event.result.skippedEntries} skipped)\n`,
+              );
+            }
+          },
+        });
+
+        for (const result of results) {
+          for (const warning of result.warnings) {
+            stderr(`${warning}\n`);
+          }
+        }
+
+        if (options.json) {
+          writeOutput(stdout, JSON.stringify(results, null, 2));
+          return;
+        }
+
+        if (results.length === 0) {
+          writeOutput(stdout, "No docsets installed.");
+          return;
+        }
+
+        writeOutput(
+          stdout,
+          formatTable(results, [
+            { header: "slug", value: (row) => row.slug },
+            { header: "status", value: (row) => row.status },
+            { header: "pages", value: (row) => row.pages },
+            { header: "skipped", value: (row) => row.skippedEntries },
+          ]),
+        );
         return;
       }
 
       throw new DdserveError(
-        'Unknown docs command. Try "ddserve docs available", "ddserve docs installed", "ddserve docs install <slug>", "ddserve docs remove <slug>", or "ddserve docs update [slug]".',
+        'Unknown docs command. Try "ddserve docs available", "ddserve docs installed", "ddserve docs install <slug...>", "ddserve docs remove <slug>", or "ddserve docs update [slug]".',
       );
     });
 
@@ -592,6 +621,10 @@ function insertBeforeHelpSection(sections: HelpSection[], title: string, section
 
 function writeOutput(stdout: (message: string) => void, message: string): void {
   stdout(`${message}\n`);
+}
+
+function formatInstallResult(result: InstallResult): string {
+  return `${result.status} ${result.slug} (${result.pages} pages, ${result.skippedEntries} skipped)`;
 }
 
 function normalizeSearchQuery(queryParts: readonly string[] | undefined): string {

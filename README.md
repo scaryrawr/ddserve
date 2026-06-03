@@ -41,8 +41,8 @@ bun run ddserve cache path
 # Refresh/list available DevDocs docsets.
 bun run ddserve docs available
 
-# Install a docset as Markdown.
-bun run ddserve docs install http
+# Install docsets as Markdown.
+bun run ddserve docs install http css
 
 # List installed docsets.
 bun run ddserve docs installed
@@ -65,7 +65,7 @@ bun run ddserve serve --host 127.0.0.1 --port 43877
 | `sources list [--json]` | List configured documentation sources. DevDocs is the only source. |
 | `docs available [--json] [--offline]` | List available DevDocs docsets. By default this refreshes `docs.json`; `--offline` requires the cached source index. |
 | `docs installed [--json]` | List installed docsets from the local cache manifest. |
-| `docs install <slug> [--json] [--force] [--offline]` | Install or update one DevDocs docset. |
+| `docs install <slug...> [--json] [--force] [--offline]` | Install or update one or more DevDocs docsets. |
 | `docs update [slug] [--json] [--force] [--offline]` | Update one docset when `slug` is provided, otherwise update every installed docset. |
 | `embeddings status [slug] [--json]` | Show embedding database, installed/indexed counts, and current/stale/missing chunk counts. |
 | `embeddings refresh [slug] [--json]` | Embed only chunks missing or stale for the configured model. |
