@@ -301,6 +301,22 @@ Available MCP capabilities:
 
 MCP search has the same prerequisites and fallback behavior as REST/CLI search: embeddings must be configured to embed the query, semantic results are returned when vectors exist for the selected scope, and keyword fallback only searches chunks already indexed in SQLite.
 
+## GitHub Copilot CLI plugin
+
+This repository can be installed as a local GitHub Copilot CLI plugin:
+
+```sh
+copilot plugin install .
+```
+
+The plugin manifest in `plugin.json` loads the MCP server configuration from `.mcp.json`, which points Copilot CLI at the local `ddserve serve` endpoint. Start `ddserve` before using the plugin-provided MCP tools:
+
+```sh
+bun run ddserve serve --host 127.0.0.1 --port 43877
+```
+
+Reinstall the local plugin after changing plugin files so Copilot CLI refreshes its cached copy.
+
 ## Development
 
 ```sh
