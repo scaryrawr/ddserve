@@ -1,5 +1,5 @@
 export const CACHE_SCHEMA_VERSION = 1;
-export const EXTRACTOR_VERSION = 5;
+export const EXTRACTOR_VERSION = 6;
 export const EXTRACTED_CONTENT_FORMAT = "markdown" as const;
 export const DEV_DOCS_SOURCE = "devdocs" as const;
 

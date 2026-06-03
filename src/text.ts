@@ -101,11 +101,141 @@ export function renderMarkdown(title: string, path: string, html: string): strin
       return lines.length > 0 ? lines.join("\n") : node.textContent?.trim() ?? "";
     },
   });
+  turndown.addRule("tables", {
+    filter: "table",
+    replacement(_content, node) {
+      return renderMarkdownTable(turndown, node);
+    },
+  });
 
   const sectionHtml = extractHtmlSection(html, path);
-  const body = removeUnpairedSurrogates(turndown.turndown(sectionHtml)).trim();
+  const body = cleanMarkdownBody(removeUnpairedSurrogates(turndown.turndown(sectionHtml)), title).trim();
 
   return removeUnpairedSurrogates([`# ${title}`, ``, `> DevDocs path: ${path}`, ``, body, ``].join("\n"));
+}
+
+interface MarkdownTableRow {
+  cells: string[];
+  isHeader: boolean;
+  firstCellIsHeader: boolean;
+}
+
+interface ElementLike {
+  nodeName: string;
+  textContent?: string | null;
+  innerHTML?: string;
+  parentElement?: ElementLike | null;
+  children: ArrayLike<ElementLike>;
+  querySelectorAll?(selectors: string): ArrayLike<ElementLike>;
+}
+
+function renderMarkdownTable(turndown: TurndownService, table: ElementLike): string {
+  const rows = Array.from(table.querySelectorAll?.("tr") ?? [])
+    .map((row) => markdownTableRow(turndown, row))
+    .filter((row): row is MarkdownTableRow => row !== undefined);
+  if (rows.length === 0) {
+    return "";
+  }
+
+  const columnCount = Math.max(...rows.map((row) => row.cells.length));
+  if (columnCount === 0) {
+    return "";
+  }
+
+  const firstRow = rows[0];
+  if (!firstRow) {
+    return "";
+  }
+
+  const hasHeaderRow = firstRow.isHeader;
+  const header = hasHeaderRow
+    ? padTableCells(firstRow.cells, columnCount)
+    : inferredTableHeader(rows, columnCount);
+  const bodyRows = hasHeaderRow ? rows.slice(1) : rows;
+  const lines = [
+    markdownTableLine(header),
+    markdownTableLine(Array.from({ length: columnCount }, () => "---")),
+    ...bodyRows.map((row) => markdownTableLine(padTableCells(row.cells, columnCount))),
+  ];
+
+  return `\n\n${lines.join("\n")}\n\n`;
+}
+
+function markdownTableRow(
+  turndown: TurndownService,
+  row: ElementLike,
+): MarkdownTableRow | undefined {
+  const cells = Array.from(row.children).filter((cell) =>
+    cell.nodeName === "TH" || cell.nodeName === "TD",
+  );
+  if (cells.length === 0) {
+    return undefined;
+  }
+
+  return {
+    cells: cells.map((cell) => markdownTableCell(turndown, cell)),
+    isHeader: isInsideTag(row, "THEAD") || cells.every((cell) => cell.nodeName === "TH"),
+    firstCellIsHeader: cells[0]?.nodeName === "TH",
+  };
+}
+
+function markdownTableCell(turndown: TurndownService, cell: ElementLike): string {
+  const markdown = turndown.turndown(cell.innerHTML ?? cell.textContent ?? "")
+    .replace(/\r\n?/g, "\n")
+    .split(/\n+/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .join("<br>");
+  const text = markdown || cell.textContent?.trim() || "";
+  return text.replace(/\|/g, "\\|");
+}
+
+function isInsideTag(element: ElementLike, tagName: string): boolean {
+  let current: ElementLike | null | undefined = element;
+  while (current) {
+    if (current.nodeName === tagName) {
+      return true;
+    }
+    current = current.parentElement;
+  }
+  return false;
+}
+
+function inferredTableHeader(rows: MarkdownTableRow[], columnCount: number): string[] {
+  if (columnCount === 2 && rows.every((row) => row.firstCellIsHeader)) {
+    return ["Property", "Value"];
+  }
+
+  return Array.from({ length: columnCount }, (_, index) => `Column ${index + 1}`);
+}
+
+function padTableCells(cells: string[], columnCount: number): string[] {
+  return Array.from({ length: columnCount }, (_, index) => cells[index] ?? "");
+}
+
+function markdownTableLine(cells: string[]): string {
+  return `| ${cells.join(" | ")} |`;
+}
+
+function cleanMarkdownBody(markdown: string, title: string): string {
+  return removeDuplicateLeadingHeading(markdown, title);
+}
+
+function removeDuplicateLeadingHeading(markdown: string, title: string): string {
+  const match = markdown.match(/^\s{0,3}#{1,6}[ \t]+(.+?)\s*(?:\n+|$)/);
+  if (!match || normalizedHeadingText(match[1] ?? "") !== normalizedHeadingText(title)) {
+    return markdown;
+  }
+
+  return markdown.slice(match[0].length);
+}
+
+function normalizedHeadingText(value: string): string {
+  return value
+    .replace(/[`*_~\[\]]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
 }
 
 export function extractHtmlSection(html: string, path: string): string {

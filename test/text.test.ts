@@ -50,6 +50,31 @@ describe("renderMarkdown", () => {
     expect(text).toContain("````\nconsole.log(```);\n````");
   });
 
+  test("removes a duplicated leading heading from the extracted body", () => {
+    const text = renderMarkdown("docker system", "engine/reference/commandline/system/index", "<h1>docker system</h1><p>Manage Docker.</p>");
+
+    expect(text.match(/^# docker system$/gm)).toHaveLength(1);
+    expect(text).toContain("Manage Docker.");
+  });
+
+  test("renders html tables as markdown tables", () => {
+    const text = renderMarkdown(
+      "docker system",
+      "engine/reference/commandline/system/index",
+      [
+        "<h2>Child commands</h2>",
+        "<table>",
+        "<thead><tr><td>Command</td><td>Description</td></tr></thead>",
+        '<tbody><tr><td><a href="../system_df/index">docker system df</a></td><td>Show docker disk usage</td></tr></tbody>',
+        "</table>",
+      ].join(""),
+    );
+
+    expect(text).toContain("| Command | Description |");
+    expect(text).toContain("| --- | --- |");
+    expect(text).toContain("| [docker system df](engine/reference/commandline/system_df/index) | Show docker disk usage |");
+  });
+
   test("removes unpaired surrogates while preserving valid emoji", () => {
     const text = renderMarkdown("Rust \uDD2C", "rust", "<p>Nightly marker 🔬 stays, but this does not: \uD83D</p>");
 

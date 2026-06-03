@@ -121,8 +121,8 @@ export async function installDocset(slug: string, options: InstallOptions): Prom
   }
 
   const lock = await acquireDocsetLock(options.cacheRoot, slug);
+  const stageDir = join(paths.docsRoot, `${slug}.partial-${process.pid}-${Date.now()}`);
   try {
-    const stageDir = join(paths.docsRoot, `${slug}.partial-${process.pid}-${Date.now()}`);
     const rawDir = join(stageDir, "raw");
     const pagesDir = join(stageDir, "pages");
     await Promise.all([mkdir(rawDir, { recursive: true }), mkdir(pagesDir, { recursive: true })]);
@@ -191,6 +191,7 @@ export async function installDocset(slug: string, options: InstallOptions): Prom
       warnings,
     };
   } finally {
+    await rm(stageDir, { recursive: true, force: true });
     await lock.release();
   }
 }

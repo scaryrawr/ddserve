@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { createHash } from "node:crypto";
 
@@ -183,6 +183,24 @@ describe("installDocset", () => {
     ]);
     const manifest = JSON.parse(await readFile(join(cacheRoot, "docs", "http", "manifest.json"), "utf8"));
     expect(manifest.pages).toHaveLength(1);
+  });
+
+  test("cleans partial docset directory when extraction fails", async () => {
+    const cacheRoot = await createTempCacheRoot("install-extraction-fail");
+    const http = createFixtureHttpClient({
+      "https://devdocs.io/docs.json": [{ name: "HTTP", slug: "http", type: "http", release: "1", mtime: 10 }],
+      "https://documents.devdocs.io/http/index.json": {
+        entries: [{ name: "HTTP Overview", path: "index", type: "HTTP" }],
+      },
+      "https://documents.devdocs.io/http/db.json": {},
+    });
+
+    await expect(installDocset("http", { cacheRoot, http, config: defaultConfig() })).rejects.toThrow(
+      'Downloaded "http", but no pages could be extracted',
+    );
+
+    const docsEntries = await readdir(join(cacheRoot, "docs"));
+    expect(docsEntries.filter((entry) => entry.startsWith("http.partial-"))).toEqual([]);
   });
 
   test("removes installed docs, cache manifest entries, and indexed embeddings", async () => {
