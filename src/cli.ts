@@ -1,4 +1,4 @@
-import { cac } from "cac";
+import { cac, type CAC } from "cac";
 import { isAbsolute, join } from "node:path";
 
 import { cachePaths, ensureCacheRoot, readCacheManifest, resolveCacheRoot } from "./cache";
@@ -44,6 +44,62 @@ interface ServeCommandOptions extends CommandOptions {
 }
 
 type SearchOutputFormat = "text" | "json" | "xml";
+
+interface HelpSection {
+  title?: string;
+  body: string;
+}
+
+interface SubcommandHelpEntry {
+  name: string;
+  description: string;
+}
+
+interface SubcommandHelpGroup {
+  command: string;
+  rawName: string;
+  entries: readonly SubcommandHelpEntry[];
+}
+
+const SUBCOMMAND_HELP_GROUPS: readonly SubcommandHelpGroup[] = [
+  {
+    command: "sources",
+    rawName: "sources [subcommand]",
+    entries: [{ name: "list", description: "List documentation sources" }],
+  },
+  {
+    command: "docs",
+    rawName: "docs [subcommand] [slug]",
+    entries: [
+      { name: "available", description: "List available DevDocs docsets" },
+      { name: "installed", description: "List installed DevDocs docsets" },
+      { name: "install <slug>", description: "Install a DevDocs docset" },
+      { name: "update [slug]", description: "Update installed DevDocs docsets" },
+    ],
+  },
+  {
+    command: "cache",
+    rawName: "cache [subcommand]",
+    entries: [{ name: "path", description: "Print the cache root path" }],
+  },
+  {
+    command: "embeddings",
+    rawName: "embeddings [subcommand] [slug]",
+    entries: [
+      { name: "status [slug]", description: "Show embedding index status" },
+      { name: "refresh [slug]", description: "Embed missing or stale chunks" },
+      { name: "rebuild [slug]", description: "Rebuild embedding index" },
+    ],
+  },
+  {
+    command: "config",
+    rawName: "config [subcommand]",
+    entries: [
+      { name: "path", description: "Print the resolved config path" },
+      { name: "show", description: "Show redacted configuration" },
+    ],
+  },
+];
 
 export async function runCli(argv: string[] = process.argv.slice(2), deps: CliDependencies = {}): Promise<void> {
   const stdout = deps.stdout ?? ((message: string) => process.stdout.write(message));
@@ -445,11 +501,66 @@ export async function runCli(argv: string[] = process.argv.slice(2), deps: CliDe
       throw new DdserveError('Unknown config command. Try "ddserve config path" or "ddserve config show".');
     });
 
-  cli.help();
+  configureHelp(cli);
   cli.version("0.1.0");
 
   cli.parse(["bun", "ddserve", ...argv], { run: false });
   await cli.runMatchedCommand();
+}
+
+function configureHelp(cli: CAC): void {
+  cli.help((sections) => {
+    const group = SUBCOMMAND_HELP_GROUPS.find(({ rawName }) => rawName === cli.matchedCommand?.rawName);
+
+    if (group) {
+      return insertBeforeHelpSection(sections, "Options", {
+        title: "Subcommands",
+        body: formatSubcommandRows(group.entries),
+      });
+    }
+
+    if (!cli.matchedCommand) {
+      return insertAfterHelpSection(sections, "Commands", {
+        title: "Subcommands",
+        body: formatSubcommandRows(
+          SUBCOMMAND_HELP_GROUPS.flatMap(({ command, entries }) =>
+            entries.map((entry) => ({
+              name: `${command} ${entry.name}`,
+              description: entry.description,
+            })),
+          ),
+        ),
+      });
+    }
+
+    return sections;
+  });
+}
+
+function formatSubcommandRows(entries: readonly SubcommandHelpEntry[]): string {
+  const longestNameLength = Math.max(...entries.map(({ name }) => name.length));
+
+  return entries.map(({ name, description }) => `  ${name.padEnd(longestNameLength)}  ${description}`).join("\n");
+}
+
+function insertAfterHelpSection(sections: HelpSection[], title: string, section: HelpSection): HelpSection[] {
+  const index = sections.findIndex((candidate) => candidate.title === title);
+
+  if (index === -1) {
+    return [...sections, section];
+  }
+
+  return [...sections.slice(0, index + 1), section, ...sections.slice(index + 1)];
+}
+
+function insertBeforeHelpSection(sections: HelpSection[], title: string, section: HelpSection): HelpSection[] {
+  const index = sections.findIndex((candidate) => candidate.title === title);
+
+  if (index === -1) {
+    return [...sections, section];
+  }
+
+  return [...sections.slice(0, index), section, ...sections.slice(index)];
 }
 
 function writeOutput(stdout: (message: string) => void, message: string): void {

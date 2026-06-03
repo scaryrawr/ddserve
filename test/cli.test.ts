@@ -37,6 +37,27 @@ afterAll(async () => {
 });
 
 describe("runCli", () => {
+  test("prints subcommand entries in root help", async () => {
+    const output = await captureConsoleHelp(["--help"]);
+
+    expect(output).toContain("sources list");
+    expect(output).toContain("docs available");
+    expect(output).toContain("docs install <slug>");
+    expect(output).toContain("cache path");
+    expect(output).toContain("embeddings status [slug]");
+    expect(output).toContain("config show");
+  });
+
+  test("prints entries for grouped subcommand help", async () => {
+    const output = await captureConsoleHelp(["docs", "--help"]);
+
+    expect(output).toContain("Subcommands:");
+    expect(output).toContain("available");
+    expect(output).toContain("installed");
+    expect(output).toContain("install <slug>");
+    expect(output).toContain("update [slug]");
+  });
+
   test("prints the resolved cache path", async () => {
     const cacheRoot = join(testRoot, "cache-path");
     let output = "";
@@ -671,6 +692,23 @@ function vectorEmbeddingClient(vector: number[]): EmbeddingClient {
       return Array.from({ length: count }, () => [...vector]);
     },
   };
+}
+
+async function captureConsoleHelp(argv: string[]): Promise<string> {
+  const originalInfo = console.info;
+  const messages: string[] = [];
+
+  console.info = (...args: unknown[]) => {
+    messages.push(args.map((arg) => String(arg)).join(" "));
+  };
+
+  try {
+    await runCli(argv, { env: {} });
+  } finally {
+    console.info = originalInfo;
+  }
+
+  return messages.join("\n");
 }
 
 function searchConfig(model: string) {
