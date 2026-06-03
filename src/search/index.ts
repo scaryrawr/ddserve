@@ -3,15 +3,16 @@ import { DdserveError } from "../errors";
 import { createOpenAiEmbeddingClient, type EmbeddingClient, type EmbeddingVector } from "../embeddings/openai";
 import { closeEmbeddingStorage, openEmbeddingStorage, type EmbeddingStorage } from "../embeddings/storage";
 import {
-  iterateSemanticSearchCandidates,
+  hydrateSemanticSearchCandidates,
+  iterateSemanticVectorCandidates,
   queryKeywordFallbackCandidates,
   type KeywordSearchCandidate,
   type SearchCandidateBase,
-  type SemanticSearchCandidate,
+  viewFloat32VectorBlob,
 } from "./storage";
 
 const DEFAULT_SEARCH_LIMIT = 10;
-const DEFAULT_SEARCH_PAGE_SIZE = 500;
+const DEFAULT_SEARCH_PAGE_SIZE = 32768;
 const SNIPPET_CONTEXT_CHARS = 48;
 const SNIPPET_MAX_CHARS = 240;
 const DATA_URI_MARKDOWN_LINK_PATTERN = /!?\[([^\]\r\n]*)\]\(\s*data:[^\s)]*;base64,[^)]+?\)/gi;
@@ -56,8 +57,8 @@ export interface SearchResult {
   text: string;
 }
 
-interface ScoredSemanticCandidate {
-  candidate: SemanticSearchCandidate;
+interface ScoredSemanticChunk {
+  chunkId: number;
   score: number;
 }
 
@@ -86,12 +87,23 @@ export async function search(options: SearchOptions): Promise<SearchResponse> {
     });
 
     if (semantic.candidateCount > 0) {
+      const candidatesByChunkId = new Map(
+        hydrateSemanticSearchCandidates(storage, semantic.results.map((result) => result.chunkId))
+          .map((candidate) => [candidate.chunkId, candidate]),
+      );
+
       return {
         query,
         mode: "semantic",
         model,
         dimensions,
-        results: semantic.results.map(({ candidate, score }) => toSearchResult(candidate, "semantic", score, query)),
+        results: semantic.results.map(({ chunkId, score }) => {
+          const candidate = candidatesByChunkId.get(chunkId);
+          if (!candidate) {
+            throw new DdserveError(`Semantic search candidate ${chunkId} could not be hydrated`);
+          }
+          return toSearchResult(candidate, "semantic", score, query);
+        }),
       };
     }
 
@@ -128,33 +140,34 @@ function rankSemanticCandidates(
     limit: number;
     pageSize?: number;
   },
-): { candidateCount: number; results: ScoredSemanticCandidate[] } {
-  const top: ScoredSemanticCandidate[] = [];
+): { candidateCount: number; results: ScoredSemanticChunk[] } {
+  const top: ScoredSemanticChunk[] = [];
   let candidateCount = 0;
   const pageSize = normalizePageSize(options.pageSize);
 
-  for (const candidate of iterateSemanticSearchCandidates(storage, {
+  for (const candidate of iterateSemanticVectorCandidates(storage, {
     model: options.model,
     dimensions: options.dimensions,
     docsetSlugs: options.resolvedSlugs,
     pageSize,
   })) {
     candidateCount += 1;
+    const vector = viewFloat32VectorBlob(candidate.vector, options.dimensions, candidate.vectorEncoding);
     const scored = {
-      candidate,
-      score: cosineSimilarity(options.queryVector, options.queryMagnitude, candidate.vector),
+      chunkId: candidate.chunkId,
+      score: cosineSimilarity(options.queryVector, options.queryMagnitude, vector),
     };
 
     if (top.length < options.limit) {
       top.push(scored);
-      top.sort(compareSemanticCandidates);
+      top.sort(compareSemanticChunks);
       continue;
     }
 
     const worst = top[top.length - 1];
-    if (worst && compareSemanticCandidates(scored, worst) < 0) {
+    if (worst && compareSemanticChunks(scored, worst) < 0) {
       top[top.length - 1] = scored;
-      top.sort(compareSemanticCandidates);
+      top.sort(compareSemanticChunks);
     }
   }
 
@@ -227,7 +240,11 @@ function cosineSimilarity(queryVector: readonly number[], queryMagnitude: number
     return 0;
   }
 
-  return dot / (queryMagnitude * Math.sqrt(candidateMagnitudeSquared));
+  const similarity = dot / (queryMagnitude * Math.sqrt(candidateMagnitudeSquared));
+  if (!Number.isFinite(similarity)) {
+    throw new DdserveError("Embedding vector contained non-finite values");
+  }
+  return similarity;
 }
 
 function keywordScore(candidate: KeywordSearchCandidate, query: string): number {
@@ -278,13 +295,13 @@ function sanitizeSnippetSource(text: string): string {
     .replace(LONG_BASE64_RUN_PATTERN, "$1");
 }
 
-function compareSemanticCandidates(left: ScoredSemanticCandidate, right: ScoredSemanticCandidate): number {
+function compareSemanticChunks(left: ScoredSemanticChunk, right: ScoredSemanticChunk): number {
   const scoreDelta = right.score - left.score;
   if (scoreDelta !== 0) {
     return scoreDelta;
   }
 
-  return compareCandidateIdentity(left.candidate, right.candidate);
+  return left.chunkId - right.chunkId;
 }
 
 function compareSearchResults(left: SearchResult, right: SearchResult): number {

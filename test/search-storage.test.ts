@@ -13,9 +13,13 @@ import {
 import { DdserveError } from "../src/errors";
 import {
   decodeFloat32VectorBlob,
+  hydrateSemanticSearchCandidates,
   iterateSemanticSearchCandidates,
+  iterateSemanticVectorCandidates,
   queryKeywordFallbackCandidates,
   querySemanticSearchCandidatePage,
+  querySemanticVectorCandidatePage,
+  viewFloat32VectorBlob,
 } from "../src/search/storage";
 
 const tempRoots: string[] = [];
@@ -28,6 +32,14 @@ describe("search storage", () => {
   test("decodes f32le vector blobs", () => {
     const vector = decodeFloat32VectorBlob(encodeFloat32Vector([0.25, -1.5, 3]), 3);
 
+    expect(Array.from(vector)).toEqual([0.25, -1.5, 3]);
+  });
+
+  test("views f32le vector blobs without copying aligned data", () => {
+    const blob = encodeFloat32Vector([0.25, -1.5, 3]);
+    const vector = viewFloat32VectorBlob(blob, 3);
+
+    expect(vector.buffer).toBe(blob.buffer);
     expect(Array.from(vector)).toEqual([0.25, -1.5, 3]);
   });
 
@@ -129,6 +141,57 @@ describe("search storage", () => {
       expect(firstPage.candidates.map((candidate) => candidate.chunkContentHash)).toEqual(["a0", "a1"]);
       expect(secondPage.candidates.map((candidate) => candidate.chunkContentHash)).toEqual(["a2", "a3"]);
       expect(iterated.map((candidate) => candidate.chunkContentHash)).toEqual(["a0", "a1", "a2", "a3", "a4"]);
+    } finally {
+      closeEmbeddingStorage(storage);
+    }
+  });
+
+  test("scans semantic vectors without hydrating text and hydrates selected chunks", async () => {
+    const storage = await openTestStorage();
+
+    try {
+      upsertFixtureDocset(storage, "alpha", "Alpha", [
+        [0, "a0", "alpha 0", [0, 0.1]],
+        [1, "a1", "alpha 1", [1, 1.1]],
+      ]);
+      upsertFixtureDocset(storage, "beta", "Beta", [[0, "b0", "beta 0", [2, 2.1]]]);
+
+      const firstPage = querySemanticVectorCandidatePage(storage, { model: "model-a", dimensions: 2, limit: 2 });
+      const secondPage = querySemanticVectorCandidatePage(storage, {
+        model: "model-a",
+        dimensions: 2,
+        afterChunkId: firstPage.nextAfterChunkId,
+        limit: 2,
+      });
+      const scoped = Array.from(iterateSemanticVectorCandidates(storage, {
+        model: "model-a",
+        dimensions: 2,
+        docsetSlugs: ["beta"],
+        pageSize: 1,
+      }));
+      const hydrated = hydrateSemanticSearchCandidates(storage, [
+        scoped[0]?.chunkId ?? 0,
+        firstPage.candidates[0]?.chunkId ?? 0,
+      ]);
+
+      expect(firstPage.hasMore).toBe(true);
+      expect(firstPage.candidates).toHaveLength(2);
+      expect(firstPage.candidates[0]).toEqual({
+        chunkId: expect.any(Number),
+        vectorEncoding: "f32le",
+        vector: expect.any(Uint8Array),
+      });
+      expect(firstPage.candidates[0]).not.toHaveProperty("chunkText");
+      expect(secondPage.candidates).toHaveLength(1);
+      expect(scoped).toHaveLength(1);
+      expect(Array.from(viewFloat32VectorBlob(scoped[0]!.vector, 2, scoped[0]!.vectorEncoding))).toEqual(
+        expectFloatVector([2, 2.1]),
+      );
+      expect(hydrated.map((candidate) => candidate.chunkContentHash).sort()).toEqual(["a0", "b0"]);
+      expect(hydrated.find((candidate) => candidate.chunkContentHash === "b0")).toMatchObject({
+        docsetSlug: "beta",
+        chunkText: "beta 0",
+      });
     } finally {
       closeEmbeddingStorage(storage);
     }

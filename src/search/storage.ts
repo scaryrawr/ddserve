@@ -23,8 +23,24 @@ export interface SemanticSearchCandidateIterationOptions extends SearchCandidate
   pageSize?: number;
 }
 
+export interface SemanticVectorCandidatePageOptions extends SearchCandidateScope {
+  afterChunkId?: number;
+  limit?: number;
+}
+
+export interface SemanticVectorCandidateIterationOptions extends SearchCandidateScope {
+  afterChunkId?: number;
+  pageSize?: number;
+}
+
 export interface SemanticSearchCandidatePage {
   candidates: SemanticSearchCandidate[];
+  nextAfterChunkId?: number;
+  hasMore: boolean;
+}
+
+export interface SemanticVectorCandidatePage {
+  candidates: SemanticVectorCandidate[];
   nextAfterChunkId?: number;
   hasMore: boolean;
 }
@@ -49,6 +65,12 @@ export interface SemanticSearchCandidate extends SearchCandidateBase {
   vector: Float32Array;
 }
 
+export interface SemanticVectorCandidate {
+  chunkId: number;
+  vectorEncoding: string;
+  vector: Uint8Array;
+}
+
 export interface KeywordSearchCandidate extends SearchCandidateBase {}
 
 export interface KeywordFallbackCandidateOptions {
@@ -67,6 +89,12 @@ interface SemanticCandidateRow extends Omit<SearchCandidateBase, "pageType"> {
 
 interface KeywordCandidateRow extends Omit<SearchCandidateBase, "pageType"> {
   pageType: string | null;
+}
+
+interface SemanticVectorCandidateRow {
+  chunkId: number;
+  vectorEncoding: string;
+  vector: Uint8Array;
 }
 
 export function querySemanticSearchCandidatePage(
@@ -130,6 +158,94 @@ export function querySemanticSearchCandidatePage(
   };
 }
 
+export function querySemanticVectorCandidatePage(
+  storage: EmbeddingStorage,
+  options: SemanticVectorCandidatePageOptions,
+): SemanticVectorCandidatePage {
+  assertNonEmpty(options.model, "embedding model");
+  assertPositiveInteger(options.dimensions, "embedding dimensions");
+  const afterChunkId = options.afterChunkId ?? 0;
+  assertNonNegativeInteger(afterChunkId, "after chunk id");
+  const limit = normalizeLimit(options.limit, DEFAULT_SEMANTIC_PAGE_SIZE, "candidate page limit");
+  const slugs = normalizeDocsetSlugs(options.docsetSlugs);
+  const sqlLimit = limit + 1;
+  const rows = slugs.length > 0
+    ? queryScopedSemanticVectorRows(storage, { ...options, docsetSlugs: slugs, afterChunkId, limit: sqlLimit })
+    : queryUnscopedSemanticVectorRows(storage, { ...options, afterChunkId, limit: sqlLimit });
+
+  const pageRows = rows.slice(0, limit);
+  const candidates = pageRows.map(mapSemanticVectorCandidateRow);
+  const nextAfterChunkId =
+    rows.length > limit && candidates.length > 0 ? candidates[candidates.length - 1]?.chunkId : undefined;
+
+  return {
+    candidates,
+    nextAfterChunkId,
+    hasMore: nextAfterChunkId !== undefined,
+  };
+}
+
+function queryUnscopedSemanticVectorRows(
+  storage: EmbeddingStorage,
+  options: {
+    model: string;
+    dimensions: number;
+    afterChunkId: number;
+    limit: number;
+  },
+): SemanticVectorCandidateRow[] {
+  return storage.db
+    .prepare<SemanticVectorCandidateRow, SqlBindings>(`
+      SELECT
+        e.chunk_id AS chunkId,
+        e.vector_encoding AS vectorEncoding,
+        e.vector AS vector
+      FROM embeddings e
+      WHERE e.model = $model
+        AND e.dimensions = $dimensions
+        AND e.chunk_id > $afterChunkId
+      ORDER BY e.chunk_id ASC
+      LIMIT $limit
+    `)
+    .all(options);
+}
+
+function queryScopedSemanticVectorRows(
+  storage: EmbeddingStorage,
+  options: {
+    model: string;
+    dimensions: number;
+    docsetSlugs: readonly string[];
+    afterChunkId: number;
+    limit: number;
+  },
+): SemanticVectorCandidateRow[] {
+  const scope = buildDocsetScope(options.docsetSlugs, "c");
+
+  return storage.db
+    .prepare<SemanticVectorCandidateRow, SqlBindings>(`
+      SELECT
+        e.chunk_id AS chunkId,
+        e.vector_encoding AS vectorEncoding,
+        e.vector AS vector
+      FROM embeddings e
+      JOIN chunks c ON c.id = e.chunk_id
+      WHERE e.model = $model
+        AND e.dimensions = $dimensions
+        AND e.chunk_id > $afterChunkId
+        ${scope.sql}
+      ORDER BY e.chunk_id ASC
+      LIMIT $limit
+    `)
+    .all({
+      model: options.model,
+      dimensions: options.dimensions,
+      afterChunkId: options.afterChunkId,
+      limit: options.limit,
+      ...scope.bindings,
+    });
+}
+
 export function* iterateSemanticSearchCandidates(
   storage: EmbeddingStorage,
   options: SemanticSearchCandidateIterationOptions,
@@ -148,6 +264,66 @@ export function* iterateSemanticSearchCandidates(
     }
     afterChunkId = page.nextAfterChunkId;
   }
+}
+
+export function* iterateSemanticVectorCandidates(
+  storage: EmbeddingStorage,
+  options: SemanticVectorCandidateIterationOptions,
+): IterableIterator<SemanticVectorCandidate> {
+  const { pageSize, ...scope } = options;
+  let afterChunkId = options.afterChunkId ?? 0;
+  const limit = normalizeLimit(pageSize, DEFAULT_SEMANTIC_PAGE_SIZE, "candidate page size");
+
+  while (true) {
+    const page = querySemanticVectorCandidatePage(storage, { ...scope, afterChunkId, limit });
+    for (const candidate of page.candidates) {
+      yield candidate;
+    }
+    if (!page.nextAfterChunkId) {
+      return;
+    }
+    afterChunkId = page.nextAfterChunkId;
+  }
+}
+
+export function hydrateSemanticSearchCandidates(
+  storage: EmbeddingStorage,
+  chunkIds: readonly number[],
+): SearchCandidateBase[] {
+  const uniqueChunkIds = normalizeChunkIds(chunkIds);
+  if (uniqueChunkIds.length === 0) {
+    return [];
+  }
+
+  const bindings: SqlBindings = {};
+  const placeholders = uniqueChunkIds.map((chunkId, index) => {
+    const key = `chunkId${index}`;
+    bindings[key] = chunkId;
+    return `$${key}`;
+  });
+
+  const rows = storage.db
+    .prepare<KeywordCandidateRow, SqlBindings>(`
+      SELECT
+        d.slug AS docsetSlug,
+        d.name AS docsetName,
+        p.page_id AS pageId,
+        p.page_name AS pageName,
+        p.page_path AS pagePath,
+        p.page_type AS pageType,
+        p.file_path AS pageFilePath,
+        c.id AS chunkId,
+        c.ordinal AS chunkOrdinal,
+        c.text AS chunkText,
+        c.content_hash AS chunkContentHash
+      FROM chunks c
+      JOIN pages p ON p.docset_slug = c.docset_slug AND p.page_id = c.page_id
+      JOIN docsets d ON d.slug = c.docset_slug
+      WHERE c.id IN (${placeholders.join(", ")})
+    `)
+    .all(bindings);
+
+  return rows.map(mapKeywordCandidateRow);
 }
 
 export function queryKeywordFallbackCandidates(
@@ -237,12 +413,47 @@ export function decodeFloat32VectorBlob(
   return vector;
 }
 
+export function viewFloat32VectorBlob(
+  blob: Uint8Array,
+  dimensions: number,
+  vectorEncoding: string = DEFAULT_VECTOR_ENCODING,
+): Float32Array {
+  if (vectorEncoding !== DEFAULT_VECTOR_ENCODING) {
+    throw new DdserveError(`Unsupported embedding vector encoding "${vectorEncoding}"`);
+  }
+  assertPositiveInteger(dimensions, "embedding dimensions");
+
+  const bytes = toUint8Array(blob);
+  const expectedByteLength = dimensions * Float32Array.BYTES_PER_ELEMENT;
+  if (bytes.byteLength !== expectedByteLength) {
+    throw new DdserveError(
+      `Embedding vector byte length ${bytes.byteLength} does not match ${dimensions} dimensions`,
+    );
+  }
+
+  if (bytes.byteOffset % Float32Array.BYTES_PER_ELEMENT === 0) {
+    return new Float32Array(bytes.buffer, bytes.byteOffset, dimensions);
+  }
+
+  const aligned = new Uint8Array(bytes.byteLength);
+  aligned.set(bytes);
+  return new Float32Array(aligned.buffer, aligned.byteOffset, dimensions);
+}
+
 function mapSemanticCandidateRow(row: SemanticCandidateRow): SemanticSearchCandidate {
   return {
     ...mapKeywordCandidateRow(row),
     model: row.model,
     dimensions: row.dimensions,
     vector: decodeFloat32VectorBlob(row.vector, row.dimensions, row.vectorEncoding),
+  };
+}
+
+function mapSemanticVectorCandidateRow(row: SemanticVectorCandidateRow): SemanticVectorCandidate {
+  return {
+    chunkId: row.chunkId,
+    vectorEncoding: row.vectorEncoding,
+    vector: row.vector,
   };
 }
 
@@ -299,6 +510,19 @@ function normalizeDocsetSlugs(docsetSlugs: readonly string[] | undefined): strin
     }
   }
   return slugs;
+}
+
+function normalizeChunkIds(chunkIds: readonly number[]): number[] {
+  const ids: number[] = [];
+  const seen = new Set<number>();
+  for (const id of chunkIds) {
+    assertPositiveInteger(id, "chunk id");
+    if (!seen.has(id)) {
+      ids.push(id);
+      seen.add(id);
+    }
+  }
+  return ids;
 }
 
 function parseKeywordTerms(query: string): string[] {
