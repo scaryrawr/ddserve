@@ -6,7 +6,7 @@ import { loadConfig, redactConfig, resolveConfigPath, type DdserveConfig } from 
 import { DdserveError } from "./errors";
 import { formatBytes, formatTable } from "./format";
 import { getAvailableDocsets } from "./devdocs";
-import { installDocset, updateDocsets } from "./install";
+import { installDocset, removeDocset, updateDocsets } from "./install";
 import { getEmbeddingsStatus, rebuildEmbeddings, refreshEmbeddings, type EmbeddingsStatusResult } from "./embeddings";
 import type { EmbeddingClient } from "./embeddings/openai";
 import type { HttpClient } from "./http";
@@ -74,6 +74,7 @@ const SUBCOMMAND_HELP_GROUPS: readonly SubcommandHelpGroup[] = [
       { name: "available", description: "List available DevDocs docsets" },
       { name: "installed", description: "List installed DevDocs docsets" },
       { name: "install <slug>", description: "Install a DevDocs docset" },
+      { name: "remove <slug>", description: "Remove an installed DevDocs docset" },
       { name: "update [slug]", description: "Update installed DevDocs docsets" },
     ],
   },
@@ -230,6 +231,23 @@ export async function runCli(argv: string[] = process.argv.slice(2), deps: CliDe
         return;
       }
 
+      if (subcommand === "remove") {
+        if (!slug) {
+          throw new DdserveError('Missing docset slug. Try "ddserve docs remove <slug>".');
+        }
+
+        const result = await removeDocset(slug, {
+          cacheRoot,
+          now: deps.now,
+        });
+
+        writeOutput(
+          stdout,
+          options.json ? JSON.stringify(result, null, 2) : `removed ${result.slug} (${result.pages} pages)`,
+        );
+        return;
+      }
+
       if (subcommand === "update") {
       const results = await updateDocsets(slug, {
         cacheRoot,
@@ -288,7 +306,7 @@ export async function runCli(argv: string[] = process.argv.slice(2), deps: CliDe
       }
 
       throw new DdserveError(
-        'Unknown docs command. Try "ddserve docs available", "ddserve docs installed", "ddserve docs install <slug>", or "ddserve docs update [slug]".',
+        'Unknown docs command. Try "ddserve docs available", "ddserve docs installed", "ddserve docs install <slug>", "ddserve docs remove <slug>", or "ddserve docs update [slug]".',
       );
     });
 

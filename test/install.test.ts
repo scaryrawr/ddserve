@@ -3,9 +3,9 @@ import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { createHash } from "node:crypto";
 
-import { installDocset, updateDocsets } from "../src/install";
+import { installDocset, removeDocset, updateDocsets } from "../src/install";
 import type { HttpClient } from "../src/http";
-import { readCacheManifest } from "../src/cache";
+import { pathExists, readCacheManifest } from "../src/cache";
 import { defaultConfig, parseConfig } from "../src/config";
 import {
   closeEmbeddingStorage,
@@ -183,6 +183,48 @@ describe("installDocset", () => {
     ]);
     const manifest = JSON.parse(await readFile(join(cacheRoot, "docs", "http", "manifest.json"), "utf8"));
     expect(manifest.pages).toHaveLength(1);
+  });
+
+  test("removes installed docs, cache manifest entries, and indexed embeddings", async () => {
+    const cacheRoot = await createTempCacheRoot("remove");
+    const http = createFixtureHttpClient(httpFixtures());
+    const embeddingClient = new FakeEmbeddingClient();
+
+    await installDocset("http", {
+      cacheRoot,
+      http,
+      config: embeddingConfig(),
+      embeddingClient,
+    });
+
+    const result = await removeDocset("http", {
+      cacheRoot,
+      now: new Date("2026-01-02T00:00:00Z"),
+    });
+
+    expect(result).toMatchObject({
+      slug: "http",
+      name: "HTTP",
+      pages: 1,
+      removedEmbeddings: {
+        deletedDocsets: 1,
+        deletedPages: 1,
+        deletedChunks: embeddingClient.inputCount,
+        deletedEmbeddings: embeddingClient.inputCount,
+      },
+    });
+    expect(await pathExists(join(cacheRoot, "docs", "http"))).toBe(false);
+
+    const topLevel = await readCacheManifest(cacheRoot);
+    expect(topLevel.updatedAt).toBe("2026-01-02T00:00:00.000Z");
+    expect(topLevel.docs.http).toBeUndefined();
+
+    const storage = await openEmbeddingStorage(cacheRoot);
+    try {
+      expect(queryEmbeddingStatus(storage, { docsetSlug: "http" })).toEqual([]);
+    } finally {
+      closeEmbeddingStorage(storage);
+    }
   });
 
   test("reports progress while updating installed docsets", async () => {

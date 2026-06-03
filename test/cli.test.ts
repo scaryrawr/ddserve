@@ -3,7 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
-import { atomicWriteJson, cachePaths, writeCacheManifest } from "../src/cache";
+import { atomicWriteJson, cachePaths, pathExists, writeCacheManifest } from "../src/cache";
 import { runCli } from "../src/cli";
 import {
   DEFAULT_EMBEDDING_BATCH_SIZE,
@@ -43,6 +43,7 @@ describe("runCli", () => {
     expect(output).toContain("sources list");
     expect(output).toContain("docs available");
     expect(output).toContain("docs install <slug>");
+    expect(output).toContain("docs remove <slug>");
     expect(output).toContain("cache path");
     expect(output).toContain("embeddings status [slug]");
     expect(output).toContain("config show");
@@ -55,6 +56,7 @@ describe("runCli", () => {
     expect(output).toContain("available");
     expect(output).toContain("installed");
     expect(output).toContain("install <slug>");
+    expect(output).toContain("remove <slug>");
     expect(output).toContain("update [slug]");
   });
 
@@ -238,6 +240,43 @@ describe("runCli", () => {
     expect(status.indexed).toEqual({ docsets: 1, pages: 3, chunks: 3 });
     expect(status.currentChunks).toBe(3);
     expect(status.missingChunks).toBe(0);
+  });
+
+  test("removes an installed docset from the CLI", async () => {
+    const cacheRoot = join(testRoot, randomUUID(), "cache");
+    const http = createFixtureHttpClient();
+
+    await runCli(["docs", "install", "http"], {
+      env: { DDSERVE_CACHE_DIR: cacheRoot },
+      http,
+      config: defaultConfig(),
+      stdout: () => {},
+    });
+
+    let output = "";
+    await runCli(["docs", "remove", "http", "--json"], {
+      env: { DDSERVE_CACHE_DIR: cacheRoot },
+      now: new Date("2026-01-02T00:00:00Z"),
+      stdout: (message) => {
+        output += message;
+      },
+    });
+
+    expect(JSON.parse(output)).toMatchObject({
+      slug: "http",
+      name: "HTTP",
+      pages: 1,
+    });
+    expect(await pathExists(join(cacheRoot, "docs", "http"))).toBe(false);
+
+    let installedOutput = "";
+    await runCli(["docs", "installed"], {
+      env: { DDSERVE_CACHE_DIR: cacheRoot },
+      stdout: (message) => {
+        installedOutput += message;
+      },
+    });
+    expect(installedOutput).toBe("No docsets installed.\n");
   });
 
   test("prints embedding refresh warnings during docs update", async () => {

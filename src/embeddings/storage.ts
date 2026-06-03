@@ -121,6 +121,14 @@ export interface DeleteStaleChunksResult {
   deletedPages: number;
 }
 
+export interface DeleteEmbeddingDocsetResult {
+  deletedDocsets: number;
+  deletedPages: number;
+  deletedChunks: number;
+  deletedEmbeddings: number;
+  deletedIndexes: number;
+}
+
 export async function openEmbeddingStorage(cacheRoot = resolveCacheRoot()): Promise<EmbeddingStorage> {
   const path = await ensureEmbeddingDbPath(cacheRoot);
   const db = new Database(path, { create: true, readwrite: true, strict: true });
@@ -673,6 +681,61 @@ export function deleteStaleChunksForDocsetModel(
   });
 
   return removeStale.immediate();
+}
+
+export function deleteEmbeddingDocset(storage: EmbeddingStorage, docsetSlug: string): DeleteEmbeddingDocsetResult {
+  assertNonEmpty(docsetSlug, "docset slug");
+  const db = storage.db;
+  const countDocsets = db.prepare<{ count: number }, SqlBindings>(`
+    SELECT COUNT(*) AS count
+    FROM docsets
+    WHERE slug = $docsetSlug
+  `);
+  const countPages = db.prepare<{ count: number }, SqlBindings>(`
+    SELECT COUNT(*) AS count
+    FROM pages
+    WHERE docset_slug = $docsetSlug
+  `);
+  const countChunks = db.prepare<{ count: number }, SqlBindings>(`
+    SELECT COUNT(*) AS count
+    FROM chunks
+    WHERE docset_slug = $docsetSlug
+  `);
+  const countEmbeddings = db.prepare<{ count: number }, SqlBindings>(`
+    SELECT COUNT(*) AS count
+    FROM embeddings e
+    JOIN chunks c ON c.id = e.chunk_id
+    WHERE c.docset_slug = $docsetSlug
+  `);
+  const countIndexes = db.prepare<{ count: number }, SqlBindings>(`
+    SELECT COUNT(*) AS count
+    FROM embedding_indexes
+    WHERE docset_slug = $docsetSlug
+  `);
+  const deleteDocset = db.prepare<unknown, SqlBindings>(`
+    DELETE FROM docsets
+    WHERE slug = $docsetSlug
+  `);
+
+  const removeDocset = db.transaction(() => {
+    const bindings = { docsetSlug };
+    const deletedPages = countPages.get(bindings)?.count ?? 0;
+    const deletedChunks = countChunks.get(bindings)?.count ?? 0;
+    const deletedEmbeddings = countEmbeddings.get(bindings)?.count ?? 0;
+    const deletedIndexes = countIndexes.get(bindings)?.count ?? 0;
+    const deletedDocsets = countDocsets.get(bindings)?.count ?? 0;
+    deleteDocset.run(bindings);
+
+    return {
+      deletedDocsets,
+      deletedPages,
+      deletedChunks,
+      deletedEmbeddings,
+      deletedIndexes,
+    };
+  });
+
+  return removeDocset.immediate();
 }
 
 export function encodeFloat32Vector(values: readonly number[]): Uint8Array {

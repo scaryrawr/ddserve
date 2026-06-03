@@ -8,6 +8,7 @@ import {
   atomicWriteJson,
   cachePaths,
   ensureCacheRoot,
+  pathExists,
   readCacheManifest,
   readDocsetManifest,
   replaceDirectory,
@@ -17,6 +18,12 @@ import { loadConfig, type DdserveConfig } from "./config";
 import { docsetDbUrl, docsetIndexUrl, DEV_DOCS_INDEX_URL, findDocset, getAvailableDocsets } from "./devdocs";
 import { refreshDocsetEmbeddings } from "./embeddings";
 import type { EmbeddingClient } from "./embeddings/openai";
+import {
+  closeEmbeddingStorage,
+  deleteEmbeddingDocset,
+  openEmbeddingStorage,
+  type DeleteEmbeddingDocsetResult,
+} from "./embeddings/storage";
 import { DdserveError, getErrorMessage } from "./errors";
 import { FetchHttpClient, type HttpClient } from "./http";
 import { extractMarkdownPages } from "./text";
@@ -51,6 +58,26 @@ export interface InstallResult {
   skippedEntries: number;
   warnings: string[];
 }
+
+export interface RemoveOptions {
+  cacheRoot: string;
+  now?: Date;
+}
+
+export interface RemoveResult {
+  slug: string;
+  name: string;
+  pages: number;
+  removedEmbeddings: DeleteEmbeddingDocsetResult;
+}
+
+const EMPTY_EMBEDDING_REMOVAL_RESULT: DeleteEmbeddingDocsetResult = {
+  deletedDocsets: 0,
+  deletedPages: 0,
+  deletedChunks: 0,
+  deletedEmbeddings: 0,
+  deletedIndexes: 0,
+};
 
 export async function installDocset(slug: string, options: InstallOptions): Promise<InstallResult> {
   assertSafePathSegment(slug, "docset slug");
@@ -150,6 +177,44 @@ export async function installDocset(slug: string, options: InstallOptions): Prom
       pages: extracted.pages.length,
       skippedEntries: extracted.skippedEntries,
       warnings,
+    };
+  } finally {
+    await lock.release();
+  }
+}
+
+export async function removeDocset(slug: string, options: RemoveOptions): Promise<RemoveResult> {
+  assertSafePathSegment(slug, "docset slug");
+  const paths = await ensureCacheRoot(options.cacheRoot);
+  const lock = await acquireDocsetLock(options.cacheRoot, slug);
+
+  try {
+    const manifest = await readCacheManifest(options.cacheRoot);
+    const docset = manifest.docs[slug];
+    if (!docset) {
+      throw new DdserveError(`Docset "${slug}" is not installed.`);
+    }
+
+    let removedEmbeddings = EMPTY_EMBEDDING_REMOVAL_RESULT;
+    if (await pathExists(paths.embeddingsDb)) {
+      const storage = await openEmbeddingStorage(options.cacheRoot);
+      try {
+        removedEmbeddings = deleteEmbeddingDocset(storage, slug);
+      } finally {
+        closeEmbeddingStorage(storage);
+      }
+    }
+
+    await rm(join(paths.docsRoot, slug), { recursive: true, force: true });
+    delete manifest.docs[slug];
+    manifest.updatedAt = (options.now ?? new Date()).toISOString();
+    await writeCacheManifest(options.cacheRoot, manifest);
+
+    return {
+      slug,
+      name: docset.name,
+      pages: docset.pageCount,
+      removedEmbeddings,
     };
   } finally {
     await lock.release();
