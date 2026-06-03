@@ -268,7 +268,11 @@ describe("server API", () => {
       });
       const toolsBody = (await tools.json()) as { result: { tools: Array<{ name: string }> } };
       expect(tools.status).toBe(200);
-      expect(toolsBody.result.tools.map((tool) => tool.name).sort()).toEqual(["get_page_content", "search_docs"]);
+      expect(toolsBody.result.tools.map((tool) => tool.name).sort()).toEqual([
+        "get_page_content",
+        "list_docsets",
+        "search_docs",
+      ]);
 
       const resourceTemplates = await postMcp(app, {
         jsonrpc: "2.0",
@@ -287,6 +291,49 @@ describe("server API", () => {
           ],
         },
       });
+    });
+
+    test("MCP list_docsets returns available documentation slugs", async () => {
+      const cacheRoot = await createTempCacheRoot();
+      await seedDocset(cacheRoot);
+      const app = createServerApp({ cacheRoot, config: parseConfig({}) });
+
+      const response = await postMcp(app, {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: {
+          name: "list_docsets",
+          arguments: {},
+        },
+      });
+      const body = (await response.json()) as {
+        result: {
+          content: Array<Record<string, unknown>>;
+          structuredContent: {
+            docsets: Array<Record<string, unknown>>;
+          };
+        };
+      };
+
+      expect(response.status).toBe(200);
+      expect(body.result.structuredContent.docsets).toEqual([
+        expect.objectContaining({
+          slug: "http",
+          name: "HTTP",
+          pageCount: 1,
+          links: expect.objectContaining({
+            self: "/api/docsets/http",
+          }),
+        }),
+      ]);
+      expect(body.result.content).toContainEqual(
+        expect.objectContaining({
+          type: "text",
+          text: expect.stringContaining("HTTP (http)"),
+        }),
+      );
+      expect(JSON.stringify(body)).not.toContain(cacheRoot);
     });
 
     test("MCP search returns sanitized structured results and page resource links", async () => {

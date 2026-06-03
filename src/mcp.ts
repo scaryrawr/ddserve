@@ -8,7 +8,9 @@ import {
   ApiError,
   DEFAULT_API_SEARCH_LIMIT,
   MAX_API_SEARCH_LIMIT,
+  docsetSummaryDto,
   getPageContentDto,
+  listInstalledDocsets,
   publicDdserveMessage,
   searchDto,
   type PageContentResponse,
@@ -19,6 +21,8 @@ import {
 export const MCP_ENDPOINT_PATH = "/mcp";
 const MCP_PAGE_RESOURCE_TEMPLATE = "ddserve://docsets/{slug}/pages/{pageId}";
 const MARKDOWN_MIME_TYPE = "text/markdown";
+
+const listDocsetsInputSchema = z.object({});
 
 const searchDocsInputSchema = z.object({
   query: z.string().min(1).describe("Search query text."),
@@ -67,7 +71,31 @@ function createDdserveMcpServer(runtime: ServerOperationRuntime): McpServer {
     },
     {
       instructions:
-        "Use search_docs to find relevant installed DevDocs pages, then use get_page_content or returned resource links to read full Markdown content. All operations are read-only.",
+        "Use list_docsets to discover available documentation slugs, search_docs to find relevant installed DevDocs pages, then get_page_content or returned resource links to read full Markdown content. All operations are read-only.",
+    },
+  );
+
+  server.registerTool(
+    "list_docsets",
+    {
+      title: "List documentation docsets",
+      description: "List available DevDocs docsets and their slugs for use with documentation search.",
+      inputSchema: listDocsetsInputSchema,
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+      },
+    },
+    async (): Promise<CallToolResult> => {
+      try {
+        const docsets = (await listInstalledDocsets(runtime.cacheRoot)).map(docsetSummaryDto);
+        return {
+          content: [{ type: "text", text: formatDocsetsSummary(docsets) }],
+          structuredContent: { docsets },
+        };
+      } catch (error) {
+        return mcpToolError(error);
+      }
     },
   );
 
@@ -151,6 +179,20 @@ function createDdserveMcpServer(runtime: ServerOperationRuntime): McpServer {
   );
 
   return server;
+}
+
+function formatDocsetsSummary(docsets: Record<string, unknown>[]): string {
+  if (docsets.length === 0) {
+    return "No DevDocs docsets are currently available.";
+  }
+
+  const lines = docsets.map((docset, index) => {
+    const slug = String(docset.slug);
+    const name = String(docset.name);
+    const pageCount = Number(docset.pageCount);
+    return `${index + 1}. ${name} (${slug}) - ${pageCount} page(s)`;
+  });
+  return `Found ${docsets.length} available DevDocs docset(s):\n${lines.join("\n")}`;
 }
 
 function searchResourceLinks(response: SearchApiResponse): ResourceLink[] {
