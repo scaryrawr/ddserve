@@ -143,13 +143,20 @@ export async function openEmbeddingStorage(cacheRoot = resolveCacheRoot()): Prom
   };
 }
 
+function configureEmbeddingStorageConnection(db: Database): void {
+  db.run("PRAGMA busy_timeout = 5000");
+  db.run("PRAGMA foreign_keys = ON");
+  db.run("PRAGMA journal_mode = WAL");
+  db.run("PRAGMA synchronous = NORMAL");
+  db.run("PRAGMA temp_store = MEMORY");
+}
+
 export function closeEmbeddingStorage(storage: EmbeddingStorage): void {
   storage.close();
 }
 
 export function initializeEmbeddingStorageSchema(db: Database, now: Date | string = new Date()): void {
-  db.run("PRAGMA foreign_keys = ON");
-  db.run("PRAGMA journal_mode = WAL");
+  configureEmbeddingStorageConnection(db);
   db.exec(`
     CREATE TABLE IF NOT EXISTS embedding_schema_metadata (
       key TEXT PRIMARY KEY,
@@ -241,8 +248,12 @@ export function initializeEmbeddingStorageSchema(db: Database, now: Date | strin
 
     CREATE INDEX IF NOT EXISTS chunks_docset_page_ordinal_idx
       ON chunks(docset_slug, page_id, ordinal);
+    CREATE INDEX IF NOT EXISTS chunks_docset_id_idx
+      ON chunks(docset_slug, id);
     CREATE INDEX IF NOT EXISTS embeddings_model_idx
       ON embeddings(model, dimensions);
+    CREATE INDEX IF NOT EXISTS embeddings_model_chunk_idx
+      ON embeddings(model, dimensions, chunk_id);
     CREATE INDEX IF NOT EXISTS embedding_indexes_docset_idx
       ON embedding_indexes(docset_slug);
   `);

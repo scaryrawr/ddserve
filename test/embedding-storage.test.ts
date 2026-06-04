@@ -34,6 +34,23 @@ describe("embedding storage", () => {
           .prepare<{ value: string }, [string]>("SELECT value FROM embedding_schema_metadata WHERE key = ?")
           .get("schema_version")?.value,
       ).toBe("1");
+      expect(storage.db.prepare<{ foreign_keys: number }, []>("PRAGMA foreign_keys").get()?.foreign_keys).toBe(1);
+      expect(storage.db.prepare<{ journal_mode: string }, []>("PRAGMA journal_mode").get()?.journal_mode).toBe("wal");
+      expect(storage.db.prepare<{ synchronous: number }, []>("PRAGMA synchronous").get()?.synchronous).toBe(1);
+      expect(storage.db.prepare<{ timeout: number }, []>("PRAGMA busy_timeout").get()?.timeout).toBe(5000);
+      expect(storage.db.prepare<{ temp_store: number }, []>("PRAGMA temp_store").get()?.temp_store).toBe(2);
+      expect(
+        storage.db
+          .prepare<{ name: string }, []>("PRAGMA index_list(embeddings)")
+          .all()
+          .map((row) => row.name),
+      ).toContain("embeddings_model_chunk_idx");
+      expect(
+        storage.db
+          .prepare<{ name: string }, []>("PRAGMA index_list(chunks)")
+          .all()
+          .map((row) => row.name),
+      ).toContain("chunks_docset_id_idx");
     } finally {
       closeEmbeddingStorage(storage);
     }
