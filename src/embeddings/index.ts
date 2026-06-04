@@ -8,11 +8,11 @@ import {
   closeEmbeddingStorage,
   deleteStaleChunksForDocsetModel,
   getChunkEmbeddingStateForModel,
+  chunkRefKey,
   openEmbeddingStorage,
   queryCurrentChunkRefsForDocsetModel,
   queryEmbeddingStatus,
   upsertChunkEmbeddings,
-  type CurrentChunkRef,
   type EmbeddingChunkInput,
   type EmbeddingStorage,
 } from "./storage";
@@ -190,6 +190,8 @@ export interface RebuildEmbeddingsOptions {
 
 export interface RefreshEmbeddingsOptions extends RebuildEmbeddingsOptions {}
 
+type InstalledEmbeddingsAction = "rebuilding" | "refreshing";
+
 export interface RebuildEmbeddingsProgressEvent {
   slug: string;
   index: number;
@@ -348,31 +350,32 @@ async function countMissingChunksWithoutStorage(
 }
 
 export async function rebuildEmbeddings(options: RebuildEmbeddingsOptions): Promise<RefreshDocsetEmbeddingsResult[]> {
-  if (!options.config.embeddings.enabled) {
-    throw new DdserveError("Embeddings are disabled. Enable embeddings in config before rebuilding.");
-  }
-  if (!options.config.openai) {
-    throw new DdserveError("OpenAI embeddings are not configured");
-  }
-
-  return processInstalledEmbeddings(options, true, "rebuilding");
+  return processConfiguredInstalledEmbeddings(options, true, "rebuilding");
 }
 
 export async function refreshEmbeddings(options: RefreshEmbeddingsOptions): Promise<RefreshDocsetEmbeddingsResult[]> {
+  return processConfiguredInstalledEmbeddings(options, false, "refreshing");
+}
+
+async function processConfiguredInstalledEmbeddings(
+  options: RebuildEmbeddingsOptions,
+  force: boolean,
+  action: InstalledEmbeddingsAction,
+): Promise<RefreshDocsetEmbeddingsResult[]> {
   if (!options.config.embeddings.enabled) {
-    throw new DdserveError("Embeddings are disabled. Enable embeddings in config before refreshing.");
+    throw new DdserveError(`Embeddings are disabled. Enable embeddings in config before ${action}.`);
   }
   if (!options.config.openai) {
     throw new DdserveError("OpenAI embeddings are not configured");
   }
 
-  return processInstalledEmbeddings(options, false, "refreshing");
+  return processInstalledEmbeddings(options, force, action);
 }
 
 async function processInstalledEmbeddings(
   options: RebuildEmbeddingsOptions,
   force: boolean,
-  action: string,
+  action: InstalledEmbeddingsAction,
 ): Promise<RefreshDocsetEmbeddingsResult[]> {
   const cacheManifest = await readCacheManifest(options.cacheRoot);
   const installed = selectInstalledDocsets(cacheManifest.docs, options.slug);
@@ -426,14 +429,10 @@ function chunksMissingCurrentEmbeddings(
     queryCurrentChunkRefsForDocsetModel(storage, {
       docsetSlug: input.docsetSlug,
       model: input.model,
-    }).map(currentChunkRefKey),
+    }).map(chunkRefKey),
   );
 
-  return input.chunks.filter((chunk) => !current.has(currentChunkRefKey(currentChunkRef(chunk))));
-}
-
-function currentChunkRefKey(chunk: CurrentChunkRef): string {
-  return `${chunk.pageId}\u0000${chunk.ordinal}\u0000${chunk.contentHash}`;
+  return input.chunks.filter((chunk) => !current.has(chunkRefKey(currentChunkRef(chunk))));
 }
 
 function dimensionsForBatch(

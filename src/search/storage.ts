@@ -1,5 +1,7 @@
 import { DEFAULT_VECTOR_ENCODING, type EmbeddingStorage } from "../embeddings/storage";
 import { DdserveError } from "../errors";
+import { assertNonEmpty, assertNonNegativeInteger, assertPositiveInteger } from "../validation";
+import { parseKeywordTerms } from "./terms";
 
 type SqlBinding = string | number | bigint | boolean | null | Uint8Array;
 type SqlBindings = Record<string, SqlBinding>;
@@ -167,11 +169,15 @@ export function querySemanticVectorCandidatePage(
   const afterChunkId = options.afterChunkId ?? 0;
   assertNonNegativeInteger(afterChunkId, "after chunk id");
   const limit = normalizeLimit(options.limit, DEFAULT_SEMANTIC_PAGE_SIZE, "candidate page limit");
-  const slugs = normalizeDocsetSlugs(options.docsetSlugs);
+  const docsetSlugs = normalizeDocsetSlugs(options.docsetSlugs);
   const sqlLimit = limit + 1;
-  const rows = slugs.length > 0
-    ? queryScopedSemanticVectorRows(storage, { ...options, docsetSlugs: slugs, afterChunkId, limit: sqlLimit })
-    : queryUnscopedSemanticVectorRows(storage, { ...options, afterChunkId, limit: sqlLimit });
+  const rows = querySemanticVectorRows(storage, {
+    model: options.model,
+    dimensions: options.dimensions,
+    docsetSlugs,
+    afterChunkId,
+    limit: sqlLimit,
+  });
 
   const pageRows = rows.slice(0, limit);
   const candidates = pageRows.map(mapSemanticVectorCandidateRow);
@@ -185,32 +191,7 @@ export function querySemanticVectorCandidatePage(
   };
 }
 
-function queryUnscopedSemanticVectorRows(
-  storage: EmbeddingStorage,
-  options: {
-    model: string;
-    dimensions: number;
-    afterChunkId: number;
-    limit: number;
-  },
-): SemanticVectorCandidateRow[] {
-  return storage.db
-    .prepare<SemanticVectorCandidateRow, SqlBindings>(`
-      SELECT
-        e.chunk_id AS chunkId,
-        e.vector_encoding AS vectorEncoding,
-        e.vector AS vector
-      FROM embeddings e
-      WHERE e.model = $model
-        AND e.dimensions = $dimensions
-        AND e.chunk_id > $afterChunkId
-      ORDER BY e.chunk_id ASC
-      LIMIT $limit
-    `)
-    .all(options);
-}
-
-function queryScopedSemanticVectorRows(
+function querySemanticVectorRows(
   storage: EmbeddingStorage,
   options: {
     model: string;
@@ -220,7 +201,16 @@ function queryScopedSemanticVectorRows(
     limit: number;
   },
 ): SemanticVectorCandidateRow[] {
-  const scope = buildDocsetScope(options.docsetSlugs, "c");
+  const scoped = options.docsetSlugs.length > 0;
+  const scope = scoped ? buildDocsetScope(options.docsetSlugs, "c") : { sql: "", bindings: {} };
+  const joinChunks = scoped ? "JOIN chunks c ON c.id = e.chunk_id" : "";
+  const bindings: SqlBindings = {
+    model: options.model,
+    dimensions: options.dimensions,
+    afterChunkId: options.afterChunkId,
+    limit: options.limit,
+    ...scope.bindings,
+  };
 
   return storage.db
     .prepare<SemanticVectorCandidateRow, SqlBindings>(`
@@ -229,7 +219,7 @@ function queryScopedSemanticVectorRows(
         e.vector_encoding AS vectorEncoding,
         e.vector AS vector
       FROM embeddings e
-      JOIN chunks c ON c.id = e.chunk_id
+      ${joinChunks}
       WHERE e.model = $model
         AND e.dimensions = $dimensions
         AND e.chunk_id > $afterChunkId
@@ -237,13 +227,7 @@ function queryScopedSemanticVectorRows(
       ORDER BY e.chunk_id ASC
       LIMIT $limit
     `)
-    .all({
-      model: options.model,
-      dimensions: options.dimensions,
-      afterChunkId: options.afterChunkId,
-      limit: options.limit,
-      ...scope.bindings,
-    });
+    .all(bindings);
 }
 
 export function* iterateSemanticSearchCandidates(
@@ -525,18 +509,6 @@ function normalizeChunkIds(chunkIds: readonly number[]): number[] {
   return ids;
 }
 
-function parseKeywordTerms(query: string): string[] {
-  return Array.from(
-    new Set(
-      query
-        .toLocaleLowerCase()
-        .split(/\s+/)
-        .map((term) => term.trim())
-        .filter((term) => term.length > 0),
-    ),
-  ).slice(0, 8);
-}
-
 function escapeLikeTerm(term: string): string {
   return term.replace(/[\\%_]/g, (match) => `\\${match}`);
 }
@@ -545,24 +517,6 @@ function normalizeLimit(limit: number | undefined, defaultLimit: number, label: 
   const value = limit ?? defaultLimit;
   assertPositiveInteger(value, label);
   return value;
-}
-
-function assertNonEmpty(value: string, label: string): void {
-  if (value.trim().length === 0) {
-    throw new DdserveError(`Invalid ${label}: value must not be empty`);
-  }
-}
-
-function assertPositiveInteger(value: number, label: string): void {
-  if (!Number.isInteger(value) || value <= 0) {
-    throw new DdserveError(`Invalid ${label}: expected a positive integer`);
-  }
-}
-
-function assertNonNegativeInteger(value: number, label: string): void {
-  if (!Number.isInteger(value) || value < 0) {
-    throw new DdserveError(`Invalid ${label}: expected a non-negative integer`);
-  }
 }
 
 function toUint8Array(value: Uint8Array): Uint8Array {

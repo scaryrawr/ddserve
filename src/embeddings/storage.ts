@@ -4,6 +4,7 @@ import { Database } from "bun:sqlite";
 
 import { ensureEmbeddingDbPath, resolveCacheRoot } from "../cache";
 import { DdserveError } from "../errors";
+import { assertNonEmpty, assertPositiveInteger } from "../validation";
 
 export const EMBEDDING_DB_SCHEMA_VERSION = 1;
 export const DEFAULT_VECTOR_ENCODING = "f32le" as const;
@@ -100,6 +101,14 @@ export interface CurrentChunkRef {
   pageId: string;
   ordinal: number;
   contentHash: string;
+}
+
+interface ChunkEmbeddingStateBindings extends SqlBindings {
+  docsetSlug: string;
+  pageId: string;
+  ordinal: number;
+  model: string;
+  dimensions: number | null;
 }
 
 export interface DeleteStaleChunksInput {
@@ -514,30 +523,7 @@ export function queryEmbeddingStatus(
 }
 
 export function getChunkEmbeddingState(storage: EmbeddingStorage, identity: ChunkEmbeddingIdentity): ChunkEmbeddingState {
-  const rows = storage.db
-    .prepare<{ contentHash: string }, SqlBindings>(`
-      SELECT c.content_hash AS contentHash
-      FROM chunks c
-      JOIN embeddings e ON e.chunk_id = c.id
-      WHERE c.docset_slug = $docsetSlug
-        AND c.page_id = $pageId
-        AND c.ordinal = $ordinal
-        AND e.model = $model
-        AND e.dimensions = $dimensions
-      ORDER BY e.updated_at DESC
-    `)
-    .all({
-      docsetSlug: identity.docsetSlug,
-      pageId: identity.pageId,
-      ordinal: identity.ordinal,
-      model: identity.model,
-      dimensions: identity.dimensions,
-    });
-
-  if (rows.some((row) => row.contentHash === identity.contentHash)) {
-    return "current";
-  }
-  return rows.length > 0 ? "stale" : "missing";
+  return queryChunkEmbeddingState(storage, identity, identity.dimensions);
 }
 
 export function isChunkEmbeddingCurrent(storage: EmbeddingStorage, identity: ChunkEmbeddingIdentity): boolean {
@@ -548,8 +534,23 @@ export function getChunkEmbeddingStateForModel(
   storage: EmbeddingStorage,
   identity: ChunkEmbeddingModelIdentity,
 ): ChunkEmbeddingState {
+  return queryChunkEmbeddingState(storage, identity, undefined);
+}
+
+function queryChunkEmbeddingState(
+  storage: EmbeddingStorage,
+  identity: ChunkEmbeddingModelIdentity,
+  dimensions: number | undefined,
+): ChunkEmbeddingState {
+  const bindings: ChunkEmbeddingStateBindings = {
+    docsetSlug: identity.docsetSlug,
+    pageId: identity.pageId,
+    ordinal: identity.ordinal,
+    model: identity.model,
+    dimensions: dimensions ?? null,
+  };
   const rows = storage.db
-    .prepare<{ contentHash: string }, SqlBindings>(`
+    .prepare<{ contentHash: string }, ChunkEmbeddingStateBindings>(`
       SELECT c.content_hash AS contentHash
       FROM chunks c
       JOIN embeddings e ON e.chunk_id = c.id
@@ -557,14 +558,10 @@ export function getChunkEmbeddingStateForModel(
         AND c.page_id = $pageId
         AND c.ordinal = $ordinal
         AND e.model = $model
+        AND ($dimensions IS NULL OR e.dimensions = $dimensions)
       ORDER BY e.updated_at DESC
     `)
-    .all({
-      docsetSlug: identity.docsetSlug,
-      pageId: identity.pageId,
-      ordinal: identity.ordinal,
-      model: identity.model,
-    });
+    .all(bindings);
 
   if (rows.some((row) => row.contentHash === identity.contentHash)) {
     return "current";
@@ -814,19 +811,7 @@ function validateChunkInput(chunk: EmbeddingChunkInput, dimensions: number): voi
   normalizeVector(chunk.vector, dimensions);
 }
 
-function assertNonEmpty(value: string, label: string): void {
-  if (value.trim().length === 0) {
-    throw new DdserveError(`Invalid ${label}: value must not be empty`);
-  }
-}
-
-function assertPositiveInteger(value: number, label: string): void {
-  if (!Number.isInteger(value) || value <= 0) {
-    throw new DdserveError(`Invalid ${label}: expected a positive integer`);
-  }
-}
-
-function chunkRefKey(chunk: CurrentChunkRef): string {
+export function chunkRefKey(chunk: CurrentChunkRef): string {
   return `${chunk.pageId}\u0000${chunk.ordinal}\u0000${chunk.contentHash}`;
 }
 

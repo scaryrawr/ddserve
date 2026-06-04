@@ -4,6 +4,7 @@ import { join, resolve } from "node:path";
 
 import { DEFAULT_CHUNK_MAX_CHARS, DEFAULT_CHUNK_OVERLAP_CHARS } from "./embeddings/chunks";
 import { DdserveError, isNodeError } from "./errors";
+import { expandHome, isPlainObject } from "./utils";
 
 export const DEFAULT_CONFIG_ENV = "DDSERVE_CONFIG";
 export const DEFAULT_CONFIG_PATH = join(homedir(), ".config", "ddserve", "config.json");
@@ -459,36 +460,31 @@ function getOptionalBoolean(value: Record<string, unknown>, key: string, path: s
 }
 
 function getOptionalInteger(value: Record<string, unknown>, key: string, path: string): number | undefined {
-  const field = value[key];
-  if (field === undefined) {
-    return undefined;
-  }
-  if (typeof field !== "number" || !Number.isSafeInteger(field)) {
-    throw new DdserveError(`Invalid ${path}.${key}: expected an integer`);
-  }
-  return field;
+  return getOptionalConstrainedInteger(value, key, path, "an integer", () => true);
 }
 
 function getOptionalPositiveInteger(value: Record<string, unknown>, key: string, path: string): number | undefined {
-  const field = value[key];
-  if (field === undefined) {
-    return undefined;
-  }
-
-  if (typeof field !== "number" || !Number.isSafeInteger(field) || field <= 0) {
-    throw new DdserveError(`Invalid ${path}.${key}: expected a positive integer`);
-  }
-  return field;
+  return getOptionalConstrainedInteger(value, key, path, "a positive integer", (field) => field > 0);
 }
 
 function getOptionalNonNegativeInteger(value: Record<string, unknown>, key: string, path: string): number | undefined {
+  return getOptionalConstrainedInteger(value, key, path, "a non-negative integer", (field) => field >= 0);
+}
+
+function getOptionalConstrainedInteger(
+  value: Record<string, unknown>,
+  key: string,
+  path: string,
+  expected: string,
+  isValid: (field: number) => boolean,
+): number | undefined {
   const field = value[key];
   if (field === undefined) {
     return undefined;
   }
 
-  if (typeof field !== "number" || !Number.isSafeInteger(field) || field < 0) {
-    throw new DdserveError(`Invalid ${path}.${key}: expected a non-negative integer`);
+  if (typeof field !== "number" || !Number.isSafeInteger(field) || !isValid(field)) {
+    throw new DdserveError(`Invalid ${path}.${key}: expected ${expected}`);
   }
   return field;
 }
@@ -543,20 +539,4 @@ function assertKnownKeys(value: Record<string, unknown>, path: string, knownKeys
       throw new DdserveError(`Invalid ${path}.${key}: unknown config field`);
     }
   }
-}
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function expandHome(input: string): string {
-  if (input === "~") {
-    return homedir();
-  }
-
-  if (input.startsWith("~/")) {
-    return join(homedir(), input.slice(2));
-  }
-
-  return input;
 }

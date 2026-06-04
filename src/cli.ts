@@ -13,6 +13,7 @@ import type { HttpClient } from "./http";
 import { search as searchDocs, type SearchResponse, type SearchResult } from "./search";
 import { resolveSearchFilterSlugs, type SearchFilterOptionValues } from "./search/filters";
 import { createServerApp, resolveServeOptions } from "./server";
+import { assertPositiveInteger } from "./validation";
 
 export interface CliDependencies {
   env?: NodeJS.ProcessEnv;
@@ -44,6 +45,7 @@ interface ServeCommandOptions extends CommandOptions {
 }
 
 type SearchOutputFormat = "text" | "json" | "xml";
+type HelpSectionPlacement = "before" | "after";
 
 interface HelpSection {
   title?: string;
@@ -569,24 +571,34 @@ function configureHelp(cli: CAC): void {
     const group = SUBCOMMAND_HELP_GROUPS.find(({ rawName }) => rawName === cli.matchedCommand?.rawName);
 
     if (group) {
-      return insertBeforeHelpSection(sections, "Options", {
-        title: "Subcommands",
-        body: formatSubcommandRows(group.entries),
-      });
+      return insertHelpSection(
+        sections,
+        "Options",
+        {
+          title: "Subcommands",
+          body: formatSubcommandRows(group.entries),
+        },
+        "before",
+      );
     }
 
     if (!cli.matchedCommand) {
-      return insertAfterHelpSection(sections, "Commands", {
-        title: "Subcommands",
-        body: formatSubcommandRows(
-          SUBCOMMAND_HELP_GROUPS.flatMap(({ command, entries }) =>
-            entries.map((entry) => ({
-              name: `${command} ${entry.name}`,
-              description: entry.description,
-            })),
+      return insertHelpSection(
+        sections,
+        "Commands",
+        {
+          title: "Subcommands",
+          body: formatSubcommandRows(
+            SUBCOMMAND_HELP_GROUPS.flatMap(({ command, entries }) =>
+              entries.map((entry) => ({
+                name: `${command} ${entry.name}`,
+                description: entry.description,
+              })),
+            ),
           ),
-        ),
-      });
+        },
+        "after",
+      );
     }
 
     return sections;
@@ -599,24 +611,21 @@ function formatSubcommandRows(entries: readonly SubcommandHelpEntry[]): string {
   return entries.map(({ name, description }) => `  ${name.padEnd(longestNameLength)}  ${description}`).join("\n");
 }
 
-function insertAfterHelpSection(sections: HelpSection[], title: string, section: HelpSection): HelpSection[] {
+function insertHelpSection(
+  sections: HelpSection[],
+  title: string,
+  section: HelpSection,
+  placement: HelpSectionPlacement,
+): HelpSection[] {
   const index = sections.findIndex((candidate) => candidate.title === title);
 
   if (index === -1) {
     return [...sections, section];
   }
 
-  return [...sections.slice(0, index + 1), section, ...sections.slice(index + 1)];
-}
+  const insertionIndex = placement === "after" ? index + 1 : index;
 
-function insertBeforeHelpSection(sections: HelpSection[], title: string, section: HelpSection): HelpSection[] {
-  const index = sections.findIndex((candidate) => candidate.title === title);
-
-  if (index === -1) {
-    return [...sections, section];
-  }
-
-  return [...sections.slice(0, index), section, ...sections.slice(index)];
+  return [...sections.slice(0, insertionIndex), section, ...sections.slice(insertionIndex)];
 }
 
 function writeOutput(stdout: (message: string) => void, message: string): void {
@@ -683,12 +692,6 @@ function parseSearchOutputFormat(options: SearchCommandOptions): SearchOutputFor
   }
 
   throw new DdserveError('Invalid --format: expected "text", "json", or "xml"');
-}
-
-function assertPositiveInteger(value: number, label: string): void {
-  if (!Number.isInteger(value) || value <= 0) {
-    throw new DdserveError(`Invalid ${label}: expected a positive integer`);
-  }
 }
 
 function formatSearchOutput(

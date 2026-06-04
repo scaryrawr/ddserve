@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 
 import { CACHE_SCHEMA_VERSION, type CacheManifest, type DocsetManifest } from "./types";
 import { DdserveError, getErrorMessage, isNodeError } from "./errors";
+import { expandHome } from "./utils";
 
 export const DEFAULT_CACHE_ENV = "DDSERVE_CACHE_DIR";
 
@@ -31,18 +32,6 @@ export function resolveCacheRoot(env: NodeJS.ProcessEnv = process.env): string {
   }
 
   return join(homedir(), ".cache", "ddserve");
-}
-
-function expandHome(input: string): string {
-  if (input === "~") {
-    return homedir();
-  }
-
-  if (input.startsWith("~/")) {
-    return join(homedir(), input.slice(2));
-  }
-
-  return input;
 }
 
 export function cachePaths(root = resolveCacheRoot()): CachePaths {

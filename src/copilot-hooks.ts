@@ -1,4 +1,5 @@
 import { DdserveError } from "./errors";
+import { isPlainObject } from "./utils";
 import {
   ApiError,
   docsetSummaryDto,
@@ -80,10 +81,6 @@ export function parseSessionStartPayload(body: unknown): CopilotSessionStartPayl
     throw new ApiError(400, "invalid_request", "Session start hook request body must be a JSON object");
   }
   return body as CopilotSessionStartPayload;
-}
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function optionalTrimmedString(value: unknown, key: string): string | undefined {

@@ -7,6 +7,7 @@ import { DdserveError, getErrorMessage } from "./errors";
 import { search as searchDocs, type SearchResponse, type SearchResult } from "./search";
 import { resolveSearchFilterSlugs } from "./search/filters";
 import type { CacheManifestDocset, DocsetManifest, PageManifestEntry } from "./types";
+import { isPlainObject } from "./utils";
 
 export const DEFAULT_PAGE_LIMIT = 100;
 export const MAX_PAGE_LIMIT = 500;
@@ -487,8 +488,4 @@ export function publicDdserveMessage(error: DdserveError): string {
 
 export function containsFilesystemPath(message: string): boolean {
   return /(?:^|\s)(?:\.{1,2}[\\/]|[^\s:]+[\\/][^\s]+|\/|~\/|[A-Za-z]:[\\/])/.test(message);
-}
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

@@ -1,5 +1,6 @@
 import type { DdserveConfig } from "../config";
 import { DdserveError } from "../errors";
+import { assertPositiveInteger } from "../validation";
 import { createOpenAiEmbeddingClient, type EmbeddingClient, type EmbeddingVector } from "../embeddings/openai";
 import { closeEmbeddingStorage, openEmbeddingStorage, type EmbeddingStorage } from "../embeddings/storage";
 import {
@@ -10,6 +11,7 @@ import {
   type SearchCandidateBase,
   viewFloat32VectorBlob,
 } from "./storage";
+import { parseKeywordTerms } from "./terms";
 
 const DEFAULT_SEARCH_LIMIT = 10;
 const DEFAULT_SEARCH_PAGE_SIZE = 32768;
@@ -248,7 +250,7 @@ function cosineSimilarity(queryVector: readonly number[], queryMagnitude: number
 }
 
 function keywordScore(candidate: KeywordSearchCandidate, query: string): number {
-  const terms = keywordTerms(query);
+  const terms = parseKeywordTerms(query);
   if (terms.length === 0) {
     return 0;
   }
@@ -276,7 +278,7 @@ function snippetFor(text: string, query: string): string {
   }
 
   const lower = normalized.toLocaleLowerCase();
-  const firstMatch = keywordTerms(query)
+  const firstMatch = parseKeywordTerms(query)
     .map((term) => lower.indexOf(term))
     .filter((index) => index >= 0)
     .sort((left, right) => left - right)[0];
@@ -333,18 +335,6 @@ function vectorMagnitude(vector: readonly number[]): number {
   return Math.sqrt(vector.reduce((sum, value) => sum + value * value, 0));
 }
 
-function keywordTerms(query: string): string[] {
-  return Array.from(
-    new Set(
-      query
-        .toLocaleLowerCase()
-        .split(/\s+/)
-        .map((term) => term.trim())
-        .filter((term) => term.length > 0),
-    ),
-  ).slice(0, 8);
-}
-
 function normalizeQuery(query: string): string {
   const normalized = query.trim();
   if (normalized.length === 0) {
@@ -383,10 +373,4 @@ function normalizeResolvedSlugs(slugs: readonly string[] | undefined): readonly 
     }
   }
   return normalized;
-}
-
-function assertPositiveInteger(value: number, label: string): void {
-  if (!Number.isInteger(value) || value <= 0) {
-    throw new DdserveError(`Invalid ${label}: expected a positive integer`);
-  }
 }
