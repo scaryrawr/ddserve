@@ -580,12 +580,17 @@ describe("server API", () => {
     expect(response.status).toBe(200);
     expect(seenQuery).toBe("hooks");
     expect(seenLimit).toBe(4);
+    expect(Object.keys(body)).toEqual(["additionalContext"]);
     expect(body.additionalContext).toContain("Installed docsets (1):");
     expect(body.additionalContext).toContain("- http: HTTP (1 page)");
     expect(body.additionalContext).toContain("Prompt-specific matches (4):");
     expect(body.additionalContext).toContain("1. http/overview-1 — HTTP Overview 1 (semantic 0.9)");
     expect(body.additionalContext).toContain("4. http/overview-4 — HTTP Overview 4 (semantic 0.87)");
     expect(body.additionalContext).toContain("Links: page /api/docsets/http/pages/overview-1; content /api/docsets/http/pages/overview-1/content");
+    expect(body.additionalContext).not.toContain("MCP endpoint");
+    expect(body.additionalContext).not.toContain("MCP tools");
+    expect(body.additionalContext).not.toContain("Suggested MCP calls");
+    expect(body.additionalContext).not.toContain("ddserve://");
     expect(body.additionalContext).not.toContain("overview-5");
     expect(JSON.stringify(body)).not.toContain("pageFilePath");
     expect(JSON.stringify(body)).not.toContain(cacheRoot);
@@ -606,8 +611,10 @@ describe("server API", () => {
     const body = (await response.json()) as { additionalContext: string };
 
     expect(response.status).toBe(200);
+    expect(Object.keys(body)).toEqual(["additionalContext"]);
     expect(body.additionalContext).toContain("- http: HTTP (1 page)");
     expect(body.additionalContext).toContain("Prompt-specific matches skipped: no initial prompt was provided.");
+    expect(body.additionalContext).not.toContain("Suggested MCP calls");
   });
 
   test("copilot session start falls back to docsets when prompt search errors", async () => {
@@ -625,8 +632,10 @@ describe("server API", () => {
     const body = (await response.json()) as { additionalContext: string };
 
     expect(response.status).toBe(200);
+    expect(Object.keys(body)).toEqual(["additionalContext"]);
     expect(body.additionalContext).toContain("- http: HTTP (1 page)");
     expect(body.additionalContext).toContain("Prompt-specific matches unavailable: Request could not be completed.");
+    expect(body.additionalContext).not.toContain("search_docs");
     expect(JSON.stringify(body)).not.toContain("embeddings.sqlite");
     expect(JSON.stringify(body)).not.toContain(cacheRoot);
   });

@@ -283,11 +283,11 @@ Endpoints:
 | `POST /api/search` | Search with JSON body: `query`, optional `slugs` array, optional `languages` array, optional `limit`. |
 | `GET /api/embeddings/status?detail=full` | Read-only embedding status. Without `detail=full`, expensive current/stale/missing recomputation is omitted. |
 | `GET /api/embeddings/status/:slug?detail=full` | Read-only per-docset embedding status. |
-| `POST /copilot/hooks/sessionStart` | Copilot CLI session-start hook. Returns installed docsets plus snippets and links for up to the top 4 prompt-relevant docs, not full page content. |
+| `POST /copilot/hooks/sessionStart` | Copilot CLI session-start hook. Returns the documented `additionalContext` field with installed docsets plus snippets and links for up to the top 4 prompt-relevant docs, not full page content. |
 | `POST /mcp` | MCP Streamable HTTP endpoint for read-only documentation tools and resources. |
 
 The API is read-only. It does not install, update, refresh, rebuild, or otherwise mutate docsets or embeddings. API search results include stable IDs and links, but intentionally do not expose local cache file paths.
-The hook endpoint is read-only and uses the same host-header protection, bearer auth, and CORS configuration as `/api` and `/mcp`.
+The hook endpoint is read-only, uses the same host-header protection, bearer auth, and CORS configuration as `/api` and `/mcp`, and follows the Copilot hooks `sessionStart` output contract by returning context only in `additionalContext`.
 
 ### MCP endpoint
 
@@ -297,6 +297,7 @@ Available MCP capabilities:
 
 | Capability | Description |
 | --- | --- |
+| Tool `list_docsets` | Lists installed DevDocs docsets and slugs for choosing search filters. |
 | Tool `search_docs` | Searches installed documentation with `query`, optional `slugs`, optional `languages`, and optional `limit` (max `50`). Results include sanitized structured metadata and `ddserve://` page resource links. |
 | Tool `get_page_content` | Reads Markdown content for `slug` and `pageId`, with optional 1-based `startLine` and `endLine`. |
 | Resource `ddserve://docsets/{slug}/pages/{pageId}` | Reads full Markdown content for a page linked from search results. Page IDs in resource URIs are URL-encoded. |

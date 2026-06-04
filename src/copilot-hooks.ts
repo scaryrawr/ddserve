@@ -5,7 +5,6 @@ import {
   listInstalledDocsets,
   publicDdserveMessage,
   searchDto,
-  type SearchApiResponse,
   type SearchApiResult,
   type ServerOperationRuntime,
 } from "./server-shared";
@@ -32,10 +31,22 @@ export interface CopilotHookDocsetSummary {
   pageCount: number;
 }
 
+export interface CopilotHookPromptSearch {
+  status: "matched" | "skipped" | "unavailable";
+  query?: string;
+  message: string;
+  mode?: string;
+  model?: string;
+  resultCount: number;
+  results: CopilotHookPromptMatch[];
+}
+
 export interface CopilotHookPromptMatch {
   docsetSlug: string;
   pageId: string;
   pageName: string;
+  pagePath: string;
+  pageType?: string;
   snippet: string;
   mode: string;
   score: number;
@@ -49,18 +60,19 @@ export async function sessionStartHookDto(
   const payload = parseSessionStartPayload(body);
   const initialPrompt = optionalTrimmedString(payload.initialPrompt, "initialPrompt");
   const docsets = await listCopilotDocsets(runtime);
+  const promptSearch = initialPrompt
+    ? await promptSearchContext(runtime, initialPrompt)
+    : skippedPromptSearch();
   const lines = [
     "ddserve DevDocs context:",
     formatDocsetsContext(docsets),
   ];
 
-  if (initialPrompt) {
-    lines.push(await formatPromptSearchContext(runtime, initialPrompt));
-  } else {
-    lines.push("Prompt-specific matches skipped: no initial prompt was provided.");
-  }
+  lines.push(formatPromptSearchContext(promptSearch));
 
-  return { additionalContext: lines.filter((line) => line.length > 0).join("\n") };
+  return {
+    additionalContext: lines.filter((line) => line.length > 0).join("\n"),
+  };
 }
 
 export function parseSessionStartPayload(body: unknown): CopilotSessionStartPayload {
@@ -122,30 +134,59 @@ function formatDocsetsContext(docsets: readonly CopilotHookDocsetSummary[]): str
   ].join("\n");
 }
 
-async function formatPromptSearchContext(runtime: ServerOperationRuntime, initialPrompt: string): Promise<string> {
+async function promptSearchContext(runtime: ServerOperationRuntime, initialPrompt: string): Promise<CopilotHookPromptSearch> {
   try {
-    return formatSearchContext(await searchDto(runtime, {
+    const response = await searchDto(runtime, {
       query: initialPrompt,
       limit: COPILOT_SESSION_START_SEARCH_LIMIT,
-    }));
+    });
+    const results = response.results.slice(0, COPILOT_SESSION_START_SEARCH_LIMIT).map(promptMatch);
+    return {
+      status: "matched",
+      query: response.query,
+      message: results.length > 0
+        ? `Found ${results.length} prompt-relevant documentation match${results.length === 1 ? "" : "es"}.`
+        : "No prompt-relevant documentation matches found.",
+      mode: response.mode,
+      model: response.model,
+      resultCount: results.length,
+      results,
+    };
   } catch (error) {
-    return `Prompt-specific matches unavailable: ${safeSearchUnavailableMessage(error)}.`;
+    return {
+      status: "unavailable",
+      query: initialPrompt,
+      message: `Prompt-specific matches unavailable: ${safeSearchUnavailableMessage(error)}.`,
+      resultCount: 0,
+      results: [],
+    };
   }
 }
 
-function formatSearchContext(response: SearchApiResponse): string {
-  if (response.results.length === 0) {
+function skippedPromptSearch(): CopilotHookPromptSearch {
+  return {
+    status: "skipped",
+    message: "Prompt-specific matches skipped: no initial prompt was provided.",
+    resultCount: 0,
+    results: [],
+  };
+}
+
+function formatPromptSearchContext(promptSearch: CopilotHookPromptSearch): string {
+  if (promptSearch.status !== "matched") {
+    return promptSearch.message;
+  }
+  if (promptSearch.results.length === 0) {
     return "Prompt-specific matches: none found.";
   }
 
   return [
-    `Prompt-specific matches (${Math.min(response.results.length, COPILOT_SESSION_START_SEARCH_LIMIT)}):`,
-    ...response.results.slice(0, COPILOT_SESSION_START_SEARCH_LIMIT).map(formatPromptMatch),
+    `Prompt-specific matches (${promptSearch.results.length}):`,
+    ...promptSearch.results.map(formatPromptMatch),
   ].join("\n");
 }
 
-function formatPromptMatch(result: SearchApiResult, index: number): string {
-  const match = promptMatch(result);
+function formatPromptMatch(match: CopilotHookPromptMatch, index: number): string {
   const pageLink = match.links.self;
   const contentLink = match.links.content;
   const links = [
@@ -165,6 +206,8 @@ function promptMatch(result: SearchApiResult): CopilotHookPromptMatch {
     docsetSlug: result.docsetSlug,
     pageId: result.pageId,
     pageName: result.pageName,
+    pagePath: result.pagePath,
+    pageType: result.pageType,
     snippet: result.snippet,
     mode: result.mode,
     score: result.score,
