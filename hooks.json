@@ -3,8 +3,9 @@
   "hooks": {
     "sessionStart": [
       {
-        "type": "http",
-        "url": "http://127.0.0.1:43877/copilot/hooks/sessionStart",
+        "type": "command",
+        "bash": "curl --fail --silent --show-error --header 'Content-Type: application/json' --request POST --data-binary @- http://127.0.0.1:43877/copilot/hooks/sessionStart",
+        "powershell": "$exitCode = 1; $payload = [Console]::In.ReadToEnd(); $temp = [IO.Path]::GetTempFileName(); try { [IO.File]::WriteAllBytes($temp, [Text.Encoding]::UTF8.GetBytes($payload)); curl.exe --fail --silent --show-error --header 'Content-Type: application/json' --request POST --data-binary \"@$temp\" http://127.0.0.1:43877/copilot/hooks/sessionStart; $exitCode = $LASTEXITCODE } finally { Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue }; exit $exitCode",
         "timeoutSec": 5
       }
     ]

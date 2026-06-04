@@ -37,8 +37,9 @@ describe("Copilot hook DTOs", () => {
       hooks: {
         sessionStart: [
           {
-            type: "http",
-            url: `http://127.0.0.1:${DEFAULT_SERVE_PORT}${COPILOT_SESSION_START_HOOK_PATH}`,
+            type: "command",
+            bash: `curl --fail --silent --show-error --header 'Content-Type: application/json' --request POST --data-binary @- http://127.0.0.1:${DEFAULT_SERVE_PORT}${COPILOT_SESSION_START_HOOK_PATH}`,
+            powershell: `$exitCode = 1; $payload = [Console]::In.ReadToEnd(); $temp = [IO.Path]::GetTempFileName(); try { [IO.File]::WriteAllBytes($temp, [Text.Encoding]::UTF8.GetBytes($payload)); curl.exe --fail --silent --show-error --header 'Content-Type: application/json' --request POST --data-binary "@$temp" http://127.0.0.1:${DEFAULT_SERVE_PORT}${COPILOT_SESSION_START_HOOK_PATH}; $exitCode = $LASTEXITCODE } finally { Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue }; exit $exitCode`,
             timeoutSec: 5,
           },
         ],
