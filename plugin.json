@@ -3,6 +3,7 @@
   "description": "Expose locally cached DevDocs documentation to GitHub Copilot CLI through ddserve's MCP endpoint.",
   "version": "0.1.0",
   "keywords": ["devdocs", "documentation", "mcp", "copilot"],
+  "skills": ["skills/"],
   "mcpServers": ".mcp.json",
   "hooks": "hooks.json"
 }

@@ -17,6 +17,7 @@
       "homepage": "https://github.com/scaryrawr/ddserve",
       "keywords": ["devdocs", "documentation", "mcp", "copilot"],
       "category": "documentation",
+      "skills": ["skills/"],
       "mcpServers": ".mcp.json",
       "hooks": "hooks.json"
     }

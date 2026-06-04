@@ -1,0 +1,43 @@
+{
+  "skill_name": "ddserve-docs-mcp",
+  "evals": [
+    {
+      "id": 1,
+      "name": "bun-sqlite-transaction-fixture",
+      "prompt": "Use only the provided input file and current documentation. Update the Bun SQLite helper so the two related writes run through the documented transaction API. Do not inspect the repository, run tests, or modify files outside the outputs directory. Save the updated TypeScript file as `sqlite-helper.ts` and a short `rationale.md` under the requested outputs directory.",
+      "expected_output": "An updated fixture and rationale that use the documented Bun SQLite transaction API rather than guessing from memory.",
+      "files": ["evals/files/sqlite-helper.ts"],
+      "expectations": [
+        "The transcript shows a ddserve documentation search for Bun SQLite transactions.",
+        "The transcript shows reading relevant ddserve page content before drafting the patch.",
+        "The updated `sqlite-helper.ts` uses `db.transaction()` or clearly equivalent documented Bun SQLite transaction API.",
+        "The repository working tree is not modified; user-facing artifacts are saved under the outputs directory."
+      ]
+    },
+    {
+      "id": 2,
+      "name": "typescript-satisfies-fixture",
+      "prompt": "Use only the provided input file and current documentation. Update the TypeScript config fixture to check the object shape while preserving literal values with the appropriate language feature. Do not inspect the repository, run tests, or modify files outside the outputs directory. Save the updated TypeScript file as `typed-config.ts` and a short `rationale.md` under the requested outputs directory.",
+      "expected_output": "An updated fixture and rationale that correctly apply TypeScript `satisfies` semantics based on documentation.",
+      "files": ["evals/files/typed-config.ts"],
+      "expectations": [
+        "The transcript shows a ddserve documentation search for TypeScript `satisfies` or related type inference behavior.",
+        "The transcript shows reading relevant ddserve page content before drafting the patch.",
+        "The updated `typed-config.ts` uses `satisfies` to check the object shape without replacing literal values with a broad type annotation.",
+        "The explanation connects the code choice to the documentation finding."
+      ]
+    },
+    {
+      "id": 3,
+      "name": "repo-internal-typo-restraint",
+      "prompt": "Use only the provided input file. Fix the typo in the README fixture. This is a repository-internal documentation cleanup with no external API, framework, library, runtime, CLI, or language behavior involved. Do not inspect the repository, run tests, use documentation tools, or modify files outside the outputs directory. Save the corrected file as `README.md` under the requested outputs directory.",
+      "expected_output": "A simple README typo fix without unnecessary documentation-tool usage.",
+      "files": ["evals/files/README-typo.md"],
+      "expectations": [
+        "The transcript does not show ddserve-search_docs or ddserve-get_page_content calls.",
+        "The output is limited to a README typo fix.",
+        "The rationale, if present, does not claim external API documentation was needed."
+      ]
+    }
+  ]
+}

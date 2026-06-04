@@ -318,13 +318,17 @@ copilot plugin marketplace add scaryrawr/ddserve
 copilot plugin install ddserve@ddserve-marketplace
 ```
 
-The plugin manifest in `plugin.json` loads the MCP server configuration from `.mcp.json` and hook configuration from `hooks.json`. Both files point Copilot CLI at `http://127.0.0.1:43877`, so start `ddserve` before using the plugin-provided MCP tools or session-start hook:
+The plugin manifest in `plugin.json` loads the MCP server configuration from `.mcp.json`, the hook configuration from `hooks.json`, and skills from `skills/`. The bundled `ddserve-docs-mcp` skill nudges Copilot CLI to consult the ddserve MCP tools before making code changes that depend on external API, framework, runtime, or library behavior.
+
+The MCP and hook files point Copilot CLI at `http://127.0.0.1:43877`, so start `ddserve` before using the plugin-provided MCP tools, session-start hook, or documentation skill:
 
 ```sh
 bun run ddserve serve --host 127.0.0.1 --port 43877
 ```
 
 Because the hook uses local non-TLS HTTP, run Copilot CLI with `COPILOT_HOOK_ALLOW_LOCALHOST=1` in its environment. If you run `ddserve` on a custom port, edit `.mcp.json` and `hooks.json` before installing the plugin. Reinstall the local plugin after changing plugin files so Copilot CLI refreshes its cached copy.
+
+The skill includes eval prompts under `skills/ddserve-docs-mcp/evals/`. Run those evals from a disposable checkout or worktree with `ddserve` already serving indexed docsets, because task evals execute Copilot CLI in the project root.
 
 ## Development
 

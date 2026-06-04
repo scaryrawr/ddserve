@@ -1,0 +1,34 @@
+[
+  {
+    "query": "Update our Bun SQLite helper to wrap multiple writes in a transaction; use the local documentation MCP server to verify the current API first.",
+    "should_trigger": true
+  },
+  {
+    "query": "Before editing this React component, check the installed React docs for the current useActionState behavior.",
+    "should_trigger": true
+  },
+  {
+    "query": "Fix a TypeScript config typing issue and confirm the satisfies operator behavior from documentation before changing code.",
+    "should_trigger": true
+  },
+  {
+    "query": "Debug a failing test that seems related to Bun test matchers and verify the matcher API in docs.",
+    "should_trigger": true
+  },
+  {
+    "query": "Rename this local helper variable to make the code clearer.",
+    "should_trigger": false
+  },
+  {
+    "query": "Fix a typo in a README sentence.",
+    "should_trigger": false
+  },
+  {
+    "query": "Summarize what files changed in the current git diff.",
+    "should_trigger": false
+  },
+  {
+    "query": "Run the existing test suite and report any failures.",
+    "should_trigger": false
+  }
+]
