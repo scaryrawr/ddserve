@@ -1,24 +1,15 @@
 {
   "name": "ddserve",
-  "module": "index.ts",
-  "type": "module",
   "private": true,
   "bin": {
     "ddserve": "./index.ts"
   },
+  "type": "module",
+  "module": "index.ts",
   "scripts": {
     "ddserve": "bun run index.ts",
     "typecheck": "tsgo --noEmit",
     "test": "bun test"
-  },
-  "devDependencies": {
-    "@types/bun": "^1.3.14",
-    "@types/html-to-text": "9.0.4",
-    "@types/turndown": "5.0.6",
-    "@typescript/native-preview": "7.0.0-dev.20260527.2"
-  },
-  "peerDependencies": {
-    "typescript": "^5"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
@@ -28,5 +19,23 @@
     "openai": "^6.39.1",
     "turndown": "7.2.4",
     "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-ai": "^0.78.1",
+    "@earendil-works/pi-coding-agent": "^0.78.1",
+    "@earendil-works/pi-tui": "^0.78.1",
+    "@types/bun": "^1.3.14",
+    "@types/html-to-text": "9.0.4",
+    "@types/turndown": "5.0.6",
+    "@typescript/native-preview": "7.0.0-dev.20260527.2",
+    "typebox": "^1.2.2"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "pi": {
+    "extensions": [
+      "./src/pi-extension.ts"
+    ]
   }
 }
